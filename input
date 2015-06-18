@@ -1,0 +1,28 @@
+units		real # <- forces are in kcal/mol-A
+
+neigh_modify    once yes  one  22 page 2200  
+
+atom_style	full
+bond_style      harmonic
+angle_style     harmonic
+dihedral_style  harmonic
+pair_style      lj/cut/coul/cut 10.0
+pair_modify     mix arithmetic
+
+kspace_style    none 
+read_data       ./data.input
+
+# velocity all create 300 100
+
+# timestep        1
+
+# fix             1 all nvt temp 300 300 100.0
+# fix             2 all shake 0.0001 10 100 b 3 5 7 
+
+special_bonds   amber                               
+thermo_style    multi
+dump 		1 all custom 1 lmp_dump.xyz id type x y z fx fy fz
+dump_modify     1 sort id
+thermo          1
+thermo_modify   line multi format float %16.10g
+run             0
