@@ -12,15 +12,13 @@ import theano
 import theano.tensor as th
 from lammps2py_interface import calc_lammps
 from sklearn.gaussian_process import GaussianProcess
-from sklearn_additions import *
+# from sklearn_additions import *
 # import gpfit
 # from ase.md.langevin import Langevin
 # from ase.md.verlet import VelocityVerlet
 # from ase.calculators.cp2k import CP2K
 # from ase.calculators.lj import LennardJones
 # from ase.calculators.lammpsrun import LAMMPS
-
-
 
 
 ##### Levi-Civita symbol used for Theano cross product #####
@@ -117,7 +115,7 @@ def get_constraint_forces(atoms, ml_model):
     return forces
 
 
-def verletstep(atoms, gp, f, dt, mixing=[1.0, 0.0], lammpsdata=None):
+def verletstep(atoms, gp, f, dt, mixing=[1.0, 0.0], lammpsdata=None, do_update=True):
     p = atoms.get_momenta()
     p += 0.5 * dt * f
     atoms.set_positions(atoms.get_positions() +
@@ -127,10 +125,11 @@ def verletstep(atoms, gp, f, dt, mixing=[1.0, 0.0], lammpsdata=None):
     # get forces
     pot_energy, f0 = calc_lammps(atoms, preloaded_data=lammpsdata)
     
-    if len(gp.X) > 100:
+    if len(gp.X) > 100 and do_update:
         # update ML potential and calculate force
         gp.update_fit(atoms.colvars(), sp.array([pot_energy]))
-        fextra = - get_constraint_forces(atoms, gp) 
+        fextra = - get_constraint_forces(atoms, gp)
+        fextra[dihedral_atoms_theta] = 0 
         # sum and rescale the two forces
         
         f = (mixing[0] * f0 - \
@@ -159,6 +158,10 @@ def draw_2Dreconstruction(ax, gp, Xnew, X_grid):
     
     ax0, ax1 = ax
     y_grid, MSE_grid = gp.predict(X_grid, eval_MSE=True)
+    
+    y_grid[y_grid > gp.y.max() + 0.2] = gp.y.max() + 0.2
+    y_grid[y_grid < gp.y.min() - 0.2] = gp.y.min() - 0.2
+    
     ax0.clear()
     ax0.scatter(X_grid[:,0], X_grid[:,1], marker = 'h', s = 200, c = MSE_grid, 
                 cmap = 'YlGnBu', alpha = 1, edgecolors='none')
@@ -198,11 +201,6 @@ def initialise_env():
     setattr(Atoms, 'psi', psi_)
     setattr(Atoms, 'rescale_velocities', rescale_velocities_)
     setattr(Atoms, 'colvars', colvars)
-
-    
-    setattr(GaussianProcess, 'predict_gradient', predict_gradient_)
-    setattr(GaussianProcess, 'accumulate_data', accumulate_data)
-    setattr(GaussianProcess, 'update_fit', update_fit_rough)
     
     if "ASE_CP2K_COMMAND" not in os.environ:
         os.environ['ASE_CP2K_COMMAND'] = '/Users/marcocaccin/Code/cp2k/cp2k/exe/Darwin-IntelMacintosh-gfortran/cp2k_shell.ssmp'
@@ -217,12 +215,12 @@ def main():
     T = 300.0
     dt = 1 * units.fs
     nsteps = 3000
-    mixing = [1.0, 0.1]
+    mixing = [1.0, .9]
     
     gp = GaussianProcess(corr='squared_exponential', 
         # theta0=1e-1, thetaL=1e-4, thetaU=1e+2,
-        theta0=3., 
-        random_start=100, normalize=False, nugget=1.0e-5)
+        theta0=1., 
+        random_start=100, normalize=False, nugget=1.0e-2)
     plt.close('all')
     plt.ion()
     fig, ax = plt.subplots(1, 2, figsize=(16, 8))
@@ -259,14 +257,17 @@ def main():
     for istep in range(nsteps):
         print("Dihedral angles | theta = %.3f, psi = %.3f" % (atoms.theta(), atoms.psi()))
         
-        pot_energy, f = verletstep(atoms, gp, f, dt, mixing=mixing, lammpsdata=lammpsdata)
+        pot_energy, f = verletstep(atoms, gp, f, dt, 
+                                   mixing=mixing, lammpsdata=lammpsdata, 
+                                   do_update = (istep % 10 == 0))
+        atoms.rescale_velocities(T)
         # pos = atoms.get_positions() 
         # posdiff = sp.sum((pos - oldpos)**2, axis=1)**0.5
         # print("dR | max = %f, mean = %f" % (posdiff.max(), posdiff.mean()))
         # traj.append(atoms.copy())
         printenergy(atoms, pot_energy, step=istep)
         
-        if hasattr(gp, 'D'):
+        if hasattr(gp, 'D') and (istep % 10 == 0):
             draw_2Dreconstruction(ax, gp, atoms.colvars().ravel(), X_grid)
             fig.canvas.draw()
         if istep % 1 == 0:    
