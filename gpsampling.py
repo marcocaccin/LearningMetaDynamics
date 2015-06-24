@@ -12,8 +12,10 @@ import theano
 import theano.tensor as th
 from lammps2py_interface import calc_lammps
 from sklearn.gaussian_process import GaussianProcess
+from sklearn.kernel_ridge import KernelRidge
+import pdb
 # from sklearn_additions import *
-# import gpfit
+# import mlmodelfit
 # from ase.md.langevin import Langevin
 # from ase.md.verlet import VelocityVerlet
 # from ase.calculators.cp2k import CP2K
@@ -29,24 +31,53 @@ eijk[0, 2, 1] = eijk[2, 1, 0] = eijk[1, 0, 2] = -1
 
 
 ##### Definition of functional groups for CVs #####
-dihedral_atoms_theta = [10,8,6,4]
-dihedral_atoms_psi = [10,8,14,16]
-fun_group_theta = range(6) + [7]
+# dihedral_atoms_theta = [10,8,6,4]
+# dihedral_atoms_psi = [10,8,14,16]
+dihedral_atoms_phi = [4,6,8,14] # C(O)-N-C(a)-C(O)
+dihedral_atoms_psi = [6,8,14,16] # N-C(a)-C(O)-N
+
+fun_group_phi = range(6) + [7]
 fun_group_psi = range(15,22)
 #############################################################
 
 
 ##### Utility functions to be added to ase.Atoms Class #####
+def get_dihedral(self, list):
+    """Calculate dihedral angle.
+
+    Calculate dihedral angle between the vectors list[0]->list[1]
+    and list[2]->list[3], where list contains the atomic indexes
+    in question.
+    """
+
+    # vector 0->1, 1->2, 2->3 and their normalized cross products:
+    a = self.positions[list[1]] - self.positions[list[0]]
+    b = self.positions[list[2]] - self.positions[list[1]]
+    c = self.positions[list[3]] - self.positions[list[2]]
+    bxa = sp.cross(b, a)
+    bxa /= sp.linalg.norm(bxa)
+    cxb = sp.cross(c, b)
+    cxb /= sp.linalg.norm(cxb)
+    angle = sp.vdot(bxa, cxb)
+    # check for numerical trouble due to finite precision:
+    if angle < -1:
+        angle = -1
+    if angle > 1:
+        angle = 1
+    angle = sp.arccos(angle)
+    return angle
+
+
+def phi_(self, dihedral_list=dihedral_atoms_phi):
+    return self.get_my_dihedral(dihedral_list)
+
+
 def psi_(self, dihedral_list=dihedral_atoms_psi):
-    return self.get_dihedral(dihedral_list)
+    return self.get_my_dihedral(dihedral_list)
 
 
-def theta_(self, dihedral_list=dihedral_atoms_theta):
-    return self.get_dihedral(dihedral_list)
-
-
-def set_theta_(self, theta):
-    self.set_dihedral(dihedral_atoms_theta, theta, indices=fun_group_theta)
+def set_phi_(self, phi):
+    self.set_dihedral(dihedral_atoms_phi, phi, indices=fun_group_phi)
 
 
 def set_psi_(self, psi):
@@ -54,7 +85,7 @@ def set_psi_(self, psi):
 
 
 def colvars(self):
-    s = sp.atleast_2d(sp.array([self.psi(), self.theta()]))
+    s = sp.atleast_2d(sp.array([self.phi(), self.psi()]))
     return s
 
 
@@ -99,23 +130,23 @@ def ddihedralangle_dr(positions, dihedron):
 
 
 def dEml_dr(positions):
-    result = ddihedralangle_dr(positions, dihedral_atoms_psi) + \
-        0 * ddihedralangle_dr(positions, dihedral_atoms_theta)
+    result = ddihedralangle_dr(positions, dihedral_atoms_phi) + \
+             ddihedralangle_dr(positions, dihedral_atoms_psi)
     return result
 
 
 def get_constraint_forces(atoms, ml_model):
     pos = atoms.get_positions()
-    ds_dr = sp.array([ddihedralangle_dr(pos, dihedral_atoms_psi), 
-                      ddihedralangle_dr(pos, dihedral_atoms_theta)])
+    ds_dr = sp.array([ddihedralangle_dr(pos, dihedral_atoms_phi), 
+                      ddihedralangle_dr(pos, dihedral_atoms_psi)])
     
     dUml_ds = ml_model.predict_gradient(sp.atleast_2d(atoms.colvars()))
-    
-    forces = sp.dot(ds_dr.T, dUml_ds.ravel()).T # sp.dot(dUml_ds, ds_dr)
+    # dUml_ds[0][1] = 0
+    forces = sp.dot(ds_dr.T, dUml_ds.ravel()).T
     return forces
 
 
-def verletstep(atoms, gp, f, dt, mixing=[1.0, 0.0], lammpsdata=None, do_update=True):
+def verletstep(atoms, mlmodel, f, dt, mixing=[1.0, 0.0], lammpsdata=None, do_update=True):
     p = atoms.get_momenta()
     p += 0.5 * dt * f
     atoms.set_positions(atoms.get_positions() +
@@ -125,20 +156,22 @@ def verletstep(atoms, gp, f, dt, mixing=[1.0, 0.0], lammpsdata=None, do_update=T
     # get forces
     pot_energy, f0 = calc_lammps(atoms, preloaded_data=lammpsdata)
     
-    if len(gp.X) > 100 and do_update:
+    if len(mlmodel.X_fit_) > 10 and do_update:
+    # if len(mlmodel.X) > 100 and do_update:
         # update ML potential and calculate force
-        gp.update_fit(atoms.colvars(), sp.array([pot_energy]))
-        fextra = - get_constraint_forces(atoms, gp)
-        fextra[dihedral_atoms_theta] = 0 
+        mlmodel.update_fit(atoms.colvars(), sp.array([pot_energy]))
+        fextra = - get_constraint_forces(atoms, mlmodel)
         # sum and rescale the two forces
         
         f = (mixing[0] * f0 - \
         mixing[1] * fextra)# * \
         # sp.sqrt((f0**2).sum(axis=1)).mean() / \
         # sp.sqrt((fextra**2).sum(axis=1)).mean())
+        # pdb.set_trace()
+    
     else:
-        # keep on accumulating, it's not time yet
-        gp.accumulate_data(atoms.colvars(), sp.array([pot_energy]))
+        # keep on accumulating, will update fit later
+        mlmodel.accumulate_data(atoms.colvars(), sp.array([pot_energy]))
         f = f0
     #     for b in range(22):
     #         atoms1 = atoms.copy()
@@ -154,29 +187,30 @@ def verletstep(atoms, gp, f, dt, mixing=[1.0, 0.0], lammpsdata=None, do_update=T
     return pot_energy, f
     
     
-def draw_2Dreconstruction(ax, gp, Xnew, X_grid):
+def draw_2Dreconstruction(ax, mlmodel, Xnew, X_grid):
     
     ax0, ax1 = ax
-    y_grid, MSE_grid = gp.predict(X_grid, eval_MSE=True)
+    y_grid = mlmodel.predict(X_grid) # , eval_MSE=True)
     
-    y_grid[y_grid > gp.y.max() + 0.2] = gp.y.max() + 0.2
-    y_grid[y_grid < gp.y.min() - 0.2] = gp.y.min() - 0.2
+    y_grid[y_grid > mlmodel.y.max() + 0.2] = mlmodel.y.max() + 0.2
+    y_grid[y_grid < mlmodel.y.min() - 0.2] = mlmodel.y.min() - 0.2
     
     ax0.clear()
-    ax0.scatter(X_grid[:,0], X_grid[:,1], marker = 'h', s = 200, c = MSE_grid, 
-                cmap = 'YlGnBu', alpha = 1, edgecolors='none')
-
+#     ax0.scatter(X_grid[:,0], X_grid[:,1], marker = 'h', s = 200, c = MSE_grid, 
+#                 cmap = 'YlGnBu', alpha = 1, edgecolors='none')
+    ax0.scatter(mlmodel.X_fit_[:,0], mlmodel.X_fit_[:,1], marker = 'o', s = 50, c = mlmodel.y, 
+                cmap = 'Spectral', alpha = .5, edgecolors='none')    
     ax1.clear()
     ax1.scatter(X_grid[:,0], X_grid[:,1], s = 200, c = y_grid, 
-                cmap = 'Spectral', alpha = 1, edgecolors='none')
+                cmap = 'Spectral', alpha = 1, edgecolors='none', marker='s')
     ax1.scatter(Xnew[0], Xnew[1], marker='h', s = 400, c = 'g', alpha = 0.5)
 
-    ax0.set_title('MSE')
-    ax1.set_title('GP Prediction')
+    ax0.set_title('Data Points')
+    ax1.set_title('ML Prediction')
     
     for axx in [ax0, ax1]:
-        axx.set_xlabel(r'$\psi$')
-        axx.set_ylabel(r'$\theta$')
+        axx.set_xlabel(r'$\phi$')
+        axx.set_ylabel(r'$\psi$')
         axx.set_xlim(X_grid[:,0].min(), X_grid[:,0].max())
         axx.set_ylim(X_grid[:,1].min(), X_grid[:,1].max())   
 
@@ -195,9 +229,10 @@ def printenergy(atoms, epot, step=-1):  # store a reference to atoms in the defi
 
 def initialise_env():
     # add convenience functions to calculate and set angles to Atoms object
-    setattr(Atoms, 'set_theta', set_theta_)
+    setattr(Atoms, 'get_my_dihedral', get_dihedral)
+    setattr(Atoms, 'set_phi', set_phi_)
     setattr(Atoms, 'set_psi', set_psi_)
-    setattr(Atoms, 'theta', theta_)
+    setattr(Atoms, 'phi', phi_)
     setattr(Atoms, 'psi', psi_)
     setattr(Atoms, 'rescale_velocities', rescale_velocities_)
     setattr(Atoms, 'colvars', colvars)
@@ -212,15 +247,17 @@ def initialise_env():
 
 def main():
     
-    T = 300.0
+    T = 500.0
     dt = 1 * units.fs
-    nsteps = 3000
-    mixing = [1.0, .9]
+    nsteps = 20000
+    mixing = [1.0, 1.0]
+    lengthscale = 1
     
-    gp = GaussianProcess(corr='squared_exponential', 
-        # theta0=1e-1, thetaL=1e-4, thetaU=1e+2,
-        theta0=1., 
-        random_start=100, normalize=False, nugget=1.0e-2)
+#     mlmodel = GaussianProcess(corr='squared_exponential', 
+#         # theta0=1e-1, thetaL=1e-4, thetaU=1e+2,
+#         theta0=1., 
+#         random_start=100, normalize=False, nugget=1.0e-2)
+    mlmodel = KernelRidge(kernel='rbf', gamma=(2. / lengthscale)**0.5, alpha=1.0e-2)
     plt.close('all')
     plt.ion()
     fig, ax = plt.subplots(1, 2, figsize=(16, 8))
@@ -243,7 +280,7 @@ def main():
     print("START")
     
     pot_energy, f = calc_lammps(atoms, preloaded_data=lammpsdata)
-    gp.accumulate_data(atoms.colvars(), sp.array([pot_energy]))
+    mlmodel.accumulate_data(atoms.colvars(), sp.array([pot_energy]))
     printenergy(atoms, pot_energy)
 
     try:
@@ -253,37 +290,45 @@ def main():
     traj = ase.io.Trajectory("atoms.traj", 'a')
     traj.write(atoms)
 
-    results = []
+    results, traj_buffer = [], []
+    # teaching_points = sp.unique(sp.exp(sp.linspace(0, sp.log(nsteps), nsteps/10)).astype('int') + 1)
+    teaching_points = sp.unique((sp.linspace(0, nsteps**(1/3), nsteps/20)**3).astype('int') + 1)
+
     for istep in range(nsteps):
-        print("Dihedral angles | theta = %.3f, psi = %.3f" % (atoms.theta(), atoms.psi()))
-        
-        pot_energy, f = verletstep(atoms, gp, f, dt, 
+        print("Dihedral angles | phi = %.3f, psi = %.3f" % (atoms.phi(), atoms.psi()))
+        do_update = (istep in teaching_points) or (istep - nsteps == 1) # istep % 20 == 0 # 
+        pot_energy, f = verletstep(atoms, mlmodel, f, dt, 
                                    mixing=mixing, lammpsdata=lammpsdata, 
-                                   do_update = (istep % 10 == 0))
-        atoms.rescale_velocities(T)
-        # pos = atoms.get_positions() 
-        # posdiff = sp.sum((pos - oldpos)**2, axis=1)**0.5
-        # print("dR | max = %f, mean = %f" % (posdiff.max(), posdiff.mean()))
-        # traj.append(atoms.copy())
+                                   do_update = do_update)
+        # atoms.rescale_velocities(T)
         printenergy(atoms, pot_energy, step=istep)
         
-        if hasattr(gp, 'D') and (istep % 10 == 0):
-            draw_2Dreconstruction(ax, gp, atoms.colvars().ravel(), X_grid)
+        if hasattr(mlmodel, 'dual_coef_') and do_update:
+            draw_2Dreconstruction(ax, mlmodel, atoms.colvars().ravel(), X_grid)
             fig.canvas.draw()
-        if istep % 1 == 0:    
-            traj.write(atoms, properties=['forces'])
-        results.append(sp.array([atoms.theta(), atoms.psi(), pot_energy]))
+
+        traj_buffer.append(atoms.copy())
+        if istep % 100 == 0:
+            for at in traj_buffer:
+                traj.write(at, properties=['forces'])
+            traj_buffer = []
+        results.append(sp.array([atoms.phi(), atoms.psi(), pot_energy]))
     traj.close()
     print("FINISHED")
-    print("theta = %.5e" % gp.theta_)
+    # print("theta = %.5e" % mlmodel.theta_)
     sp.savetxt('results.csv', sp.array(results))
+    sp.savetxt('mlmodel.dual_coef_.csv', mlmodel.dual_coef_)
+    sp.savetxt('mlmodel.X_fit_.csv', mlmodel.X_fit_)
+    sp.savetxt('mlmodel.y.csv', mlmodel.y)
     calc = None
     traj = ase.io.Trajectory("atoms.traj", "r")
     ats = []
     for atoms in traj:
         ats.append(atoms)
     ase.io.write("atomstraj.xyz", ats, format="extxyz")
+    
+    return mlmodel
 
 if __name__ == '__main__':
     initialise_env()
-    main()
+    ret = main()
