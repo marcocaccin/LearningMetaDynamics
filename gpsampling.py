@@ -293,7 +293,9 @@ def main():
     #         random_start=100, normalize=False, nugget=1.0e-2)
     mlmodel = KernelRidge(kernel='rbf', 
                           gamma=gamma, gammaL = gamma/4, gammaU=4*gamma,
-                           alpha=1.0e-1, variable_noise=False, max_lhood=False)
+                           alpha=1.0e-2, variable_noise=False, max_lhood=False)
+    data = sp.loadtxt('phi_psi_ener_coarse_1M_md.csv')
+    mlmodel.fit(data[:,:2], data[:,2])
     plt.close('all')
     plt.ion()
     fig, ax = plt.subplots(1, 2, figsize=(24, 13))
@@ -334,7 +336,7 @@ def main():
     for istep in range(nsteps):
         
         print("Dihedral angles | phi = %.3f, psi = %.3f " % (atoms.phi(), atoms.psi()))
-        do_update = (istep in teaching_points) or (istep - nsteps == 1) # istep % 20 == 0 # 
+        do_update = False # (istep in teaching_points) or (istep - nsteps == 1) # istep % 20 == 0 # 
         pot_energy, f = verletstep(atoms, mlmodel, f, dt, 
                                    mixing=mixing, lammpsdata=lammpsdata, 
                                    do_update = do_update)
@@ -345,12 +347,15 @@ def main():
                 print("Lengthscale = %.3e, Noise = %.3e" % (1/(2 * mlmodel.gamma)**0.5, mlmodel.noise.mean()))
             except:
                 print("")    
-        if hasattr(mlmodel, 'dual_coef_') and do_update:
+        #         if hasattr(mlmodel, 'dual_coef_') and do_update:
+        #             draw_2Dreconstruction(ax, mlmodel, atoms.colvars().ravel(), X_grid)
+        #             fig.canvas.draw()
+        #             if False: # istep > 1000:
+        #                 draw_3Dreconstruction(fig3d, ax3d, mlmodel, X_grid)
+        #                 fig3d.canvas.draw()
+        if istep % 100 == 0:
             draw_2Dreconstruction(ax, mlmodel, atoms.colvars().ravel(), X_grid)
             fig.canvas.draw()
-            if False: # istep > 1000:
-                draw_3Dreconstruction(fig3d, ax3d, mlmodel, X_grid)
-                fig3d.canvas.draw()
         traj_buffer.append(atoms.copy())
         if istep % 100 == 0:
             for at in traj_buffer:
