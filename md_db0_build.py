@@ -7,6 +7,7 @@ from ase import units
 from ase import Atoms
 import matplotlib.pyplot as plt
 from matplotlib.mlab import griddata
+import pickle as pkl
 
 dihedral_atoms_phi = [4,6,8,14] # C(O)-N-C(a)-C(O)
 dihedral_atoms_psi = [6,8,14,16] # N-C(a)-C(O)-N
@@ -55,8 +56,8 @@ def round_vector(vec, precision = 0.05):
 
 ### CODE STARTS HERE ###
 
-run_from_scratch = False
-T = 300
+run_from_scratch = True
+T = 400
 
 if run_from_scratch:
     setattr(Atoms, 'phi', phi_)
@@ -97,9 +98,9 @@ if run_from_scratch:
 
     phipsi_pot = sp.hstack((colvars,energies[:,None]))
     print("Saving data...")
-    sp.savetxt('phi_psi_pot_md.csv', phipsi_pot)
+    sp.savetxt('phi_psi_pot_md300.csv', phipsi_pot)
 else:
-    data = sp.loadtxt('phi_psi_pot_md.csv')
+    data = sp.loadtxt('phi_psi_pot_md300.csv')
     colvars = data[:,:2]
     energies = data[:,2]
 
@@ -115,17 +116,22 @@ colvars_2 = []
 energies_mean = []
 energies_min = []
 n_confs = []
+free_energies = []
+
 for s, energy in energies_r.iteritems():
+    energy = sp.array(energy)
     colvars_2.append(sp.array(s.split('-')).astype('float'))
-    energies_mean.append(sp.array(energy).mean())
-    energies_min.append(sp.array(energy).min())
+    energies_mean.append(energy.mean())
+    energies_min.append(energy.min())
     n_confs.append(len(energy))
+    free_energies.append(- units.kB * T * sp.log(sp.exp(-energy / (units.kB * T)).sum()))
 
 colvars_2 = sp.array(colvars_2)
 n_confs = sp.array(n_confs)
 energies_min = sp.array(energies_min)
 energies_mean = sp.array(energies_mean)
-entropy = units.kB * sp.log(n_confs)
+free_energies = sp.array(free_energies)
+
 
 phi, psi = colvars_2[:,0], colvars_2[:,1]
 phimin, phimax = phi.min(), phi.max()
@@ -141,14 +147,7 @@ ax.set_xlim(phimin, phimax)
 ax.set_ylim(psimin, psimax)
 plt.colorbar(sc, format='%.3e')
 fig.savefig('energy_mean.png')
-ax.clear()
-fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
-sc = ax.scatter(phi, psi, c=entropy, marker = 's', s = 120,
-           cmap = 'RdBu', alpha = .8, edgecolors='none')
-ax.set_xlim(phimin, phimax)
-ax.set_ylim(psimin, psimax)
-plt.colorbar(sc, format='%.3e')
-fig.savefig('entropy.png')
+
 ax.clear()
 fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
 sc = ax.scatter(phi, psi, c=energies_min, marker = 's', s = 120,
@@ -157,23 +156,34 @@ ax.set_xlim(phimin, phimax)
 ax.set_ylim(psimin, psimax)
 plt.colorbar(sc, format='%.3e')
 fig.savefig('energy_min.png')
-ax.clear()
-fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
-sc = ax.scatter(phi, psi, c=energies_min - T*entropy, marker = 's', s = 120,
-           cmap = 'RdBu', alpha = .8, edgecolors='none')
-ax.set_xlim(phimin, phimax)
-ax.set_ylim(psimin, psimax)
-plt.colorbar(sc, format='%.3e')
-fig.savefig('free_energy_min.png')
-ax.clear()
-fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
-sc = ax.scatter(phi, psi, c=energies_mean - T*entropy, marker = 's', s = 120,
-           cmap = 'RdBu', alpha = .8, edgecolors='none')
-ax.set_xlim(phimin, phimax)
-ax.set_ylim(psimin, psimax)
-plt.colorbar(sc, format='%.3e')
-fig.savefig('free_energy_mean.png')
 
+ax.clear()
+fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
+sc = ax.scatter(phi, psi, c=free_energies, marker = 's', s = 120,
+           cmap = 'RdBu', alpha = .8, edgecolors='none')
+ax.set_xlim(phimin, phimax)
+ax.set_ylim(psimin, psimax)
+plt.colorbar(sc, format='%.3e')
+fig.savefig('free_energy.png')
+
+ax.clear()
+fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
+sc = ax.scatter(phi, psi, c=energies_min-free_energies, marker = 's', s = 120,
+           cmap = 'RdBu', alpha = .8, edgecolors='none')
+ax.set_xlim(phimin, phimax)
+ax.set_ylim(psimin, psimax)
+plt.colorbar(sc, format='%.3e')
+fig.savefig('TS_min.png')
+
+
+ax.clear()
+fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
+sc = ax.scatter(phi, psi, c=energies_mean-free_energies, marker = 's', s = 120,
+           cmap = 'RdBu', alpha = .8, edgecolors='none')
+ax.set_xlim(phimin, phimax)
+ax.set_ylim(psimin, psimax)
+plt.colorbar(sc, format='%.3e')
+fig.savefig('TS_mean.png')
 
 
 # X, Y, Z = grid(colvars[:,0], colvars[:,1], energies)
