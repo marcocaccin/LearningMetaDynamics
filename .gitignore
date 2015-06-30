@@ -16,3 +16,17 @@ log
 *.tmp
 
 *.csv
+
+*.log
+
+log_gpsampling-100k-300K
+
+PotEng.md
+
+*.plumed
+
+*.input
+
+*.bkp
+
+*.DEFAULT
