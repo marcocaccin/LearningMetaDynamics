@@ -25,4 +25,4 @@ dump            1 all custom 1 lmp_md.xyz id type x y z fx fy fz
 dump_modify     1 sort id
 thermo          1
 thermo_modify   line multi format float %16.10g
-run             400000
+run             1000000

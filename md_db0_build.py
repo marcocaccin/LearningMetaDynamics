@@ -17,25 +17,6 @@ fun_group_psi = range(15,22)
 
 
 ##### Utility functions to be added to ase.Atoms Class #####
-def get_my_dihedral(self, list):
-    """Calculate dihedral angle.
-
-    Calculate dihedral angle between the vectors list[0]->list[1]
-    and list[2]->list[3], where list contains the atomic indexes
-    in question.
-    """
-
-    # vector 0->1, 1->2, 2->3 and their normalized cross products:
-    a = self.positions[list[1]] - self.positions[list[0]]
-    b = self.positions[list[2]] - self.positions[list[1]]
-    c = self.positions[list[3]] - self.positions[list[2]]
-    bxa = sp.cross(b, a)
-    bxa /= LA.norm(bxa)
-    cxb = sp.cross(c, b)
-    cxb /= LA.norm(cxb)
-    angle = sp.vdot(bxa, cxb)
-    angle = sp.arccos(angle)
-    return angle
 
 
 def phi_(self, dihedral_list=dihedral_atoms_phi):
@@ -68,48 +49,132 @@ def grid(x, y, z, resX=100, resY=100):
     return X, Y, Z
 
 
-# setattr(Atoms, 'get_my_dihedral', get_my_dihedral)
-setattr(Atoms, 'phi', phi_)
-setattr(Atoms, 'psi', psi_)
-setattr(Atoms, 'colvars', colvars)
 
-# os.system('lmp_mpi < input_md')
+def round_vector(vec, precision = 0.05):
+    return (vec / precision).astype('int') * precision + 0.5 * precision
 
+### CODE STARTS HERE ###
 
-# load trajectory and get atomic positions into adata
-print("Reading positions from trajectory file...")
-data = []
-with open('lmp_md.xyz', 'r') as file:
-    for i, line in enumerate(file.readlines()):
-        if i % 31 > 8:
-            data.append(line.split()[2:5])
-n_atoms = 22 
+run_from_scratch = False
+T = 300
 
-print("Converting data...")
-data = sp.asarray(data).astype('float')
-data = data.reshape((len(data)/n_atoms, n_atoms, 3))
+if run_from_scratch:
+    setattr(Atoms, 'phi', phi_)
+    setattr(Atoms, 'psi', psi_)
+    setattr(Atoms, 'colvars', colvars)
 
-# write potential energies to file
-print("Reading potential energies...")
-os.system('grep PotEng log.lammps | awk {\'print $3\'} > PotEng.md')
-energies = sp.loadtxt('PotEng.md')
-energies *= units.kcal / units.mol
-
-# now extract CVs from positions
-
-colvars = []
-print("Converting positions into collective variables...")
-for positions in data:
-    atoms = Atoms(['H']*n_atoms, positions)
-    colvars.append(atoms.colvars().flatten())
-colvars = sp.asarray(colvars)
+    os.system('lmp_mpi < input_md')
 
 
-phipsi_pot = sp.hstack((colvars,energies[:,None]))
-print("Saving data...")
-sp.savetxt('psi_theta_pot_100k_md.csv', phipsi_pot)
+    # load trajectory and get atomic positions into adata
+    print("Reading positions from trajectory file...")
+    data = []
+    with open('lmp_md.xyz', 'r') as file:
+        for i, line in enumerate(file.readlines()):
+            if i % 31 > 8:
+                data.append(line.split()[2:5])
+    n_atoms = 22 
+
+    print("Converting data...")
+    data = sp.asarray(data).astype('float')
+    data = data.reshape((len(data)/n_atoms, n_atoms, 3))
+
+    # write potential energies to file
+    print("Reading potential energies...")
+    os.system('grep PotEng log.lammps | awk {\'print $3\'} > PotEng.md')
+    energies = sp.loadtxt('PotEng.md')
+    energies *= units.kcal / units.mol
+
+    # now extract CVs from positions
+
+    colvars = []
+    print("Converting positions into collective variables...")
+    for positions in data:
+        atoms = Atoms(['H']*n_atoms, positions)
+        colvars.append(atoms.colvars().flatten())
+    colvars = sp.asarray(colvars)
 
 
+    phipsi_pot = sp.hstack((colvars,energies[:,None]))
+    print("Saving data...")
+    sp.savetxt('phi_psi_pot_md.csv', phipsi_pot)
+else:
+    data = sp.loadtxt('phi_psi_pot_md.csv')
+    colvars = data[:,:2]
+    energies = data[:,2]
+
+colvars_r = round_vector(colvars)
+energies_r = {}
+for i, s in enumerate(colvars_r):
+    if ('%f-%f' % (s[0], s[1])) in energies_r.keys():
+        energies_r['%f-%f' % (s[0], s[1])].append(energies[i])
+    else:
+        energies_r['%f-%f' % (s[0], s[1])] = [energies[i]]
+
+colvars_2 = []
+energies_mean = []
+energies_min = []
+n_confs = []
+for s, energy in energies_r.iteritems():
+    colvars_2.append(sp.array(s.split('-')).astype('float'))
+    energies_mean.append(sp.array(energy).mean())
+    energies_min.append(sp.array(energy).min())
+    n_confs.append(len(energy))
+
+colvars_2 = sp.array(colvars_2)
+n_confs = sp.array(n_confs)
+energies_min = sp.array(energies_min)
+energies_mean = sp.array(energies_mean)
+entropy = units.kB * sp.log(n_confs)
+
+phi, psi = colvars_2[:,0], colvars_2[:,1]
+phimin, phimax = phi.min(), phi.max()
+psimin, psimax = psi.min(), psi.max()
+phirange = phimax - phimin
+psirange = psimax - psimin
+aspect_ratio = psirange/phirange
 print("Plotting trajectory...")
-X, Y, Z = grid(colvars[:,0], colvars[:,1], energies)
-plt.contourf(X, Y, Z, cmap='Spectral')
+fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
+sc = ax.scatter(phi, psi, c=energies_mean, marker = 's', s = 120,
+                cmap = 'RdBu', alpha = .8, edgecolors='none')
+ax.set_xlim(phimin, phimax)
+ax.set_ylim(psimin, psimax)
+plt.colorbar(sc, format='%.3e')
+fig.savefig('energy_mean.png')
+ax.clear()
+fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
+sc = ax.scatter(phi, psi, c=entropy, marker = 's', s = 120,
+           cmap = 'RdBu', alpha = .8, edgecolors='none')
+ax.set_xlim(phimin, phimax)
+ax.set_ylim(psimin, psimax)
+plt.colorbar(sc, format='%.3e')
+fig.savefig('entropy.png')
+ax.clear()
+fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
+sc = ax.scatter(phi, psi, c=energies_min, marker = 's', s = 120,
+           cmap = 'RdBu', alpha = .8, edgecolors='none')
+ax.set_xlim(phimin, phimax)
+ax.set_ylim(psimin, psimax)
+plt.colorbar(sc, format='%.3e')
+fig.savefig('energy_min.png')
+ax.clear()
+fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
+sc = ax.scatter(phi, psi, c=energies_min - T*entropy, marker = 's', s = 120,
+           cmap = 'RdBu', alpha = .8, edgecolors='none')
+ax.set_xlim(phimin, phimax)
+ax.set_ylim(psimin, psimax)
+plt.colorbar(sc, format='%.3e')
+fig.savefig('free_energy_min.png')
+ax.clear()
+fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
+sc = ax.scatter(phi, psi, c=energies_mean - T*entropy, marker = 's', s = 120,
+           cmap = 'RdBu', alpha = .8, edgecolors='none')
+ax.set_xlim(phimin, phimax)
+ax.set_ylim(psimin, psimax)
+plt.colorbar(sc, format='%.3e')
+fig.savefig('free_energy_mean.png')
+
+
+
+# X, Y, Z = grid(colvars[:,0], colvars[:,1], energies)
+# plt.contourf(X, Y, Z, cmap='Spectral')
