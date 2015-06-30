@@ -1,0 +1,4 @@
+add dynamics in the CV space:
+a point particle P moves in the CV space with mass m and feeling the ML potential living 
+in the same CV space.
+P exerts a force to the real system (molecule) via a spring attached between them.

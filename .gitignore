@@ -19,6 +19,8 @@ log
 
 *.log
 
+log.*
+
 log_gpsampling-100k-300K
 
 PotEng.md
