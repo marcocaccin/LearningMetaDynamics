@@ -2,10 +2,6 @@
 from __future__ import print_function, division
 
 import os
-from matplotlib import pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-from matplotlib import cm
-from matplotlib.ticker import LinearLocator, FormatStrFormatter
 import scipy as sp
 import scipy.linalg as LA
 from ase.atoms import Atoms
@@ -18,10 +14,13 @@ from lammps2py_interface import calc_lammps
 from sklearn.gaussian_process import GaussianProcess
 from sklearn.kernel_ridge import KernelRidge
 import pdb
-# from sklearn_additions import *
-# import mlmodelfit
+# import matplotlib
+# matplotlib.use('GTK3Cairo')
+from matplotlib import pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib import cm
+from matplotlib.ticker import LinearLocator, FormatStrFormatter
 # from ase.md.langevin import Langevin
-# from ase.md.verlet import VelocityVerlet
 # from ase.calculators.cp2k import CP2K
 # from ase.calculators.lj import LennardJones
 # from ase.calculators.lammpsrun import LAMMPS
@@ -35,8 +34,6 @@ eijk[0, 2, 1] = eijk[2, 1, 0] = eijk[1, 0, 2] = -1
 
 
 ##### Definition of functional groups for CVs #####
-# dihedral_atoms_theta = [10,8,6,4]
-# dihedral_atoms_psi = [10,8,14,16]
 dihedral_atoms_phi = [4,6,8,14] # C(O)-N-C(a)-C(O)
 dihedral_atoms_psi = [6,8,14,16] # N-C(a)-C(O)-N
 
@@ -162,15 +159,14 @@ def verletstep(atoms, mlmodel, f, dt, mixing=[1.0, 0.0], lammpsdata=None, do_upd
     atoms.set_positions(atoms.get_positions() +
                         dt * p / atoms.get_masses()[:,None])
     atoms.set_momenta(p)
-    # get forces
+    # get actual forces and potential energy of configuration
     pot_energy, f0 = calc_lammps(atoms, preloaded_data=lammpsdata)
-    
+    # Accumulate the new observation in the dataset
+    mlmodel.accumulate_data(atoms.colvars(), sp.array([pot_energy]))
+    # update ML potential if required
     if len(mlmodel.X_fit_) > 100 and do_update:
-        # update ML potential
-        mlmodel.update_fit(atoms.colvars(), sp.array([pot_energy]))
-    else:
-        # keep on accumulating, will update fit later
-        mlmodel.accumulate_data(atoms.colvars(), sp.array([pot_energy]))
+        mlmodel.update_fit()
+    # Get ML constraint forces if the model is fitted
     if hasattr(mlmodel, 'dual_coef_'):
         fextra = - get_constraint_forces(atoms, mlmodel)
     else:
@@ -182,19 +178,10 @@ def verletstep(atoms, mlmodel, f, dt, mixing=[1.0, 0.0], lammpsdata=None, do_upd
     #             mix = 1.2
     #         else:
     #             mix = 0.8
-    #         # sum and rescale the two forces
-        
+
+    # Compose the actual and the ML forces together by mixing them accordingly
     f = (mixing[0] * f0 - mixing[1] * fextra)
-    #     for b in range(22):
-    #         atoms1 = atoms.copy()
-    #         pos = atoms1.get_positions()
-    #         pos[b,2] += 0.001
-    #         atoms1.set_positions(pos) 
-    #         pot1, f1 = calc_lammps(atoms1)
-    #         dL = 0.5*(f0[b,2]+f1[b,2])*0.001
-    #         dPot = pot1 - pot_energy
-    #         dfrac = (dPot + dL) / dPot
-    #         print("DEBUG | atom %03d, (dEpot+dL)/dEpot = %.5e" % ((b+1), dfrac))
+    
     atoms.set_momenta(atoms.get_momenta() + 0.5 * dt * f)
     return pot_energy, f
     
@@ -221,12 +208,12 @@ def draw_2Dreconstruction(ax, mlmodel, Xnew, X_grid):
 
     ax0.set_title('Data Points')
     ax1.set_title('ML Prediction')
-    
+    1/0
     for axx in [ax0, ax1]:
         axx.set_xlabel(r'$\phi$')
         axx.set_ylabel(r'$\psi$')
         axx.set_xlim(0, 2*sp.pi)
-        axx.set_ylim(0, 2*sp.pi)   
+        axx.set_ylim(0, 2*sp.pi)
 
 
 def draw_3Dreconstruction(fig, ax, mlmodel, X_grid):
@@ -283,9 +270,9 @@ def main():
     
     T = 300.0
     dt = 1 * units.fs
-    nsteps = 2000
+    nsteps = 10000
     mixing = [1.0, 1.]
-    lengthscale = .5
+    lengthscale = .4
     gamma = 1 / (2 * lengthscale**2)
     #     mlmodel = GaussianProcess(corr='squared_exponential', 
     #         # theta0=1e-1, thetaL=1e-4, thetaU=1e+2,
@@ -294,14 +281,12 @@ def main():
     mlmodel = KernelRidge(kernel='rbf', 
                           gamma=gamma, gammaL = gamma/4, gammaU=4*gamma,
                            alpha=1.0e-2, variable_noise=False, max_lhood=False)
-    data = sp.loadtxt('phi_psi_ener_coarse_1M_md.csv')
+    data = sp.loadtxt('phi_psi_minener_coarse_1M_md.csv')
     mlmodel.fit(data[:,:2], data[:,2])
     plt.close('all')
     plt.ion()
     fig, ax = plt.subplots(1, 2, figsize=(24, 13))
-    fig3d = plt.figure(figsize=(16,16))
-    ax3d = fig3d.gca(projection='3d')
-    X_grid = Xplotgrid(sp.array([0., 0.]), 2 * sp.pi * sp.array([1., 1.]), 2, 100)
+    X_grid = Xplotgrid(sp.array([0., 0.]), 2 * sp.pi * sp.array([1., 1.]), 2, 70)
     
     
     atoms = ase.io.read('myplum.xyz')
@@ -321,7 +306,8 @@ def main():
     pot_energy, f = calc_lammps(atoms, preloaded_data=lammpsdata)
     mlmodel.accumulate_data(atoms.colvars(), sp.array([pot_energy]))
     printenergy(atoms, pot_energy)
-
+    draw_3Dreconstruction(fig3d, ax3d, mlmodel, X_grid)
+    fig3d.canvas.draw()
     try:
         os.remove('atoms.traj')
     except:
@@ -336,11 +322,11 @@ def main():
     for istep in range(nsteps):
         
         print("Dihedral angles | phi = %.3f, psi = %.3f " % (atoms.phi(), atoms.psi()))
-        do_update = False # (istep in teaching_points) or (istep - nsteps == 1) # istep % 20 == 0 # 
+        do_update = (istep in teaching_points) or (istep - nsteps == 1) # istep % 20 == 0 # 
         pot_energy, f = verletstep(atoms, mlmodel, f, dt, 
                                    mixing=mixing, lammpsdata=lammpsdata, 
                                    do_update = do_update)
-        # atoms.rescale_velocities(T)
+        atoms.rescale_velocities(T)
         printenergy(atoms, pot_energy/atoms.get_number_of_atoms(), step=istep)
         if do_update:
             try:
@@ -353,7 +339,7 @@ def main():
         #             if False: # istep > 1000:
         #                 draw_3Dreconstruction(fig3d, ax3d, mlmodel, X_grid)
         #                 fig3d.canvas.draw()
-        if istep % 100 == 0:
+        if istep % 300 == 0:
             draw_2Dreconstruction(ax, mlmodel, atoms.colvars().ravel(), X_grid)
             fig.canvas.draw()
         traj_buffer.append(atoms.copy())
