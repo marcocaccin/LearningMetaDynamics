@@ -30,6 +30,8 @@ def replace_positions_lammps(atoms, datafile='data.input', preloaded_data=None):
 
     
 def load_lammps_forces(atoms, dumpfile='lmp_dump.xyz'):
+    # WARNING: MUST declare "sort" option in LAMMPS input file for an ordered dump file.
+    # Atoms will be ordered randomly otherwise
     with open(dumpfile, 'r') as file:
         data = file.readlines()
     n = atoms.get_number_of_atoms()
@@ -38,11 +40,6 @@ def load_lammps_forces(atoms, dumpfile='lmp_dump.xyz'):
     adata = sp.asarray([s.strip().split() for s in fstrings]).astype('float')
     indices = adata[:,0].astype('int') - 1
     forces = adata[indices][:,-3:]
-    #     for i, fstring in enumerate(fstrings):
-    #         line = fstring.strip().split()
-    #         # i = int(line[0]) - 1
-    #         print(i)
-    #         forces[i] = sp.array(line[-3:]).astype('float')
     # convert from kcal mol-1 A-1 to eV A-1    
     forces *=  kcalmol2eV
     # print ("Forces:\n", forces)
