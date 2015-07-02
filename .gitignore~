@@ -1,5 +1,5 @@
 
-*#
+*.plumed#
 
 *.traj
 
@@ -34,3 +34,9 @@ PotEng.md
 *.DEFAULT
 
 data.input
+
+data.input
+
+log.lammps.md
+
+log.lammps.md
