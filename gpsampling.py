@@ -327,12 +327,12 @@ def main():
     # draw_3Dreconstruction(fig3d, ax3d, mlmodel, X_grid)
     # fig3d.canvas.draw()
     try:
-        os.remove('atoms.traj')
+        os.remove('atomstraj.xyz')
     except:
         pass
-    traj = ase.io.Trajectory("atoms.traj", 'a')
-    traj.write(atoms)
-
+    traj = open("atomstraj.xyz", 'a')
+    atoms.write(traj, format='extxyz')
+    
     results, traj_buffer = [], []
     # teaching_points = sp.unique(sp.exp(sp.linspace(0, sp.log(nsteps), nsteps/10)).astype('int') + 1)
     teaching_points = sp.unique((sp.linspace(0, nsteps**(1/3), nsteps/20)**3).astype('int') + 1)
@@ -340,7 +340,7 @@ def main():
     for istep in range(nsteps):
         
         print("Dihedral angles | phi = %.3f, psi = %.3f " % (atoms.phi(), atoms.psi()))
-        do_update = (istep > 100) # (istep in teaching_points) or (istep - nsteps == 1) # istep % 20 == 0 # 
+        do_update = (istep > 1000) # (istep in teaching_points) or (istep - nsteps == 1) # istep % 20 == 0 # 
         pot_energy, f = verletstep(atoms, mlmodel, f, dt, 
                                    mixing=mixing, lammpsdata=lammpsdata, 
                                    do_update = do_update)
@@ -363,7 +363,7 @@ def main():
         traj_buffer.append(atoms.copy())
         if istep % 100 == 0:
             for at in traj_buffer:
-                traj.write(at, properties=['forces'])
+                atoms.write(traj, format='extxyz')
             traj_buffer = []
         results.append(sp.array([atoms.phi(), atoms.psi(), pot_energy]))
     traj.close()
@@ -374,11 +374,11 @@ def main():
     sp.savetxt('mlmodel.X_fit_.csv', mlmodel.X_fit_)
     sp.savetxt('mlmodel.y.csv', mlmodel.y)
     calc = None
-    traj = ase.io.Trajectory("atoms.traj", "r")
-    ats = []
-    for atoms in traj:
-        ats.append(atoms)
-    ase.io.write("atomstraj.xyz", ats, format="extxyz")
+    #     traj = ase.io.Trajectory("atoms.traj", "r")
+    #     ats = []
+    #     for atoms in traj:
+    #         ats.append(atoms)
+    #     ase.io.write("atomstraj.xyz", ats, format="extxyz")
     
     return mlmodel
 
