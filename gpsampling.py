@@ -159,8 +159,9 @@ def round_vector(vec, precision = 0.05):
     return ((vec + 0.5 * precision) / precision).astype('int') * precision 
 
 
-def verletstep(atoms, mlmodel, f, dt, mixing=[1.0, 0.0], lammpsdata=None, do_update=True):
+def verletstep(atoms, mlmodel, forces, dt, mixing=[1.0, 0.0], lammpsdata=None, do_update=True):
     p = atoms.get_momenta()
+    f = forces[0] + forces[1]
     p += 0.5 * dt * f
     atoms.set_positions(atoms.get_positions() +
                         dt * p / atoms.get_masses()[:,None])
@@ -191,7 +192,7 @@ def verletstep(atoms, mlmodel, f, dt, mixing=[1.0, 0.0], lammpsdata=None, do_upd
     else:
         if hasattr(mlmodel, 'dual_coef_'):
             print("ML model not fitted yet")
-        fextra = 0
+        fextra = sp.zeros(f0.shape)
     # X_near = Xplotgrid([atoms.phi() - 0.2, atoms.psi() - 0.2], [atoms.phi() - 0.2, atoms.psi() - 0.2], 2, 10)
     # y_near_mean = mlmodel.predict(X_near).mean()
     # if pot_energy < y_near_mean:
@@ -200,10 +201,10 @@ def verletstep(atoms, mlmodel, f, dt, mixing=[1.0, 0.0], lammpsdata=None, do_upd
     #             mix = 0.8
 
     # Compose the actual and the ML forces together by mixing them accordingly
-    f = (mixing[0] * f0 - mixing[1] * fextra)
-    
+    forces = [mixing[0] * f0, - mixing[1] * fextra]
+    f = f = forces[0] + forces[1]
     atoms.set_momenta(atoms.get_momenta() + 0.5 * dt * f)
-    return pot_energy, f
+    return pot_energy, [mixing[0] * f0, - mixing[1] * fextra]
 
 
 def printenergy(atoms, epot, step=-1):  # store a reference to atoms in the definition.
@@ -233,7 +234,7 @@ def main():
     
     T = 300.0
     dt = 1 * units.fs
-    nsteps = 200
+    nsteps = 2000
     mixing = [1.0, .9]
     lengthscale = 0.6
     gamma = 1 / (2 * lengthscale**2)
@@ -287,32 +288,25 @@ def main():
         pot_energy, f = verletstep(atoms, mlmodel, f, dt, 
                                    mixing=mixing, lammpsdata=lammpsdata, 
                                    do_update = do_update)
-        atoms.rescale_velocities(T)
+        # atoms.rescale_velocities(T)
         printenergy(atoms, pot_energy/atoms.get_number_of_atoms(), step=istep)
         if do_update:
             try:
                 print("Lengthscale = %.3e, Noise = %.3e" % (1/(2 * mlmodel.gamma)**0.5, mlmodel.noise.mean()))
             except:
-                print("")    
-        #         if hasattr(mlmodel, 'dual_coef_') and do_update:
-        #             draw_2Dreconstruction(ax, mlmodel, atoms.colvars().ravel(), X_grid)
-        #             fig.canvas.draw()
-        #             if False: # istep > 1000:
-        #                 draw_3Dreconstruction(fig3d, ax3d, mlmodel, X_grid)
-        #                 fig3d.canvas.draw()
+                print("")
         if 'datasetplot' not in locals():
             datasetplot = pl.Plot_datapts(ax[0], mlmodel)
         else:
             datasetplot.update()
-        fig.canvas.draw()
         if hasattr(mlmodel, 'dual_coef_'):
             if 'my2dplot' not in locals():
                 my2dplot = pl.Plot_energy_n_point(ax[1], mlmodel, atoms.colvars().ravel())
             else:
                 my2dplot.update_prediction()
                 my2dplot.update_current_point(atoms.colvars().ravel())
-
-
+        fig.canvas.draw()
+        
         traj_buffer.append(atoms.copy())
         if istep % 100 == 0:
             for at in traj_buffer:
@@ -327,11 +321,6 @@ def main():
     sp.savetxt('mlmodel.X_fit_.csv', mlmodel.X_fit_)
     sp.savetxt('mlmodel.y.csv', mlmodel.y)
     calc = None
-    #     traj = ase.io.Trajectory("atoms.traj", "r")
-    #     ats = []
-    #     for atoms in traj:
-    #         ats.append(atoms)
-    #     ase.io.write("atomstraj.xyz", ats, format="extxyz")
     
     return mlmodel
 
