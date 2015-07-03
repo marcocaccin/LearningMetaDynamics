@@ -12,15 +12,9 @@ import ase.io
 import theano
 import theano.tensor as th
 from lammps2py_interface import calc_lammps
-from sklearn.gaussian_process import GaussianProcess
 from sklearn.kernel_ridge import KernelRidge
 import pdb
-# import matplotlib
-# matplotlib.use('GTK3Cairo')
 from matplotlib import pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-from matplotlib import cm
-from matplotlib.ticker import LinearLocator, FormatStrFormatter
 # from ase.md.langevin import Langevin
 # from ase.calculators.cp2k import CP2K
 # from ase.calculators.lj import LennardJones
