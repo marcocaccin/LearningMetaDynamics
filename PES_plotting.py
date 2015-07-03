@@ -51,11 +51,10 @@ class Plot_datapts:
         self.ax = ax
         self.mlmodel = mlmodel
         self.ylim = self.xlim = (0, 2*sp.pi)
-        self.scatterplot = ax.scatter(self.mlmodel.X_fit_[:,0], self.mlmodel.X_fit_[:,0], 
+        self.scatterplot = ax.scatter(self.mlmodel.X_fit_[:,0], self.mlmodel.X_fit_[:,1], 
                                       c = self.mlmodel.y, marker = 'o', s = 50, 
                                       cmap = cm.RdBu, alpha = 0.8, edgecolors='none',
                                       vmin = -1., vmax = 0.5)
-        
         self.ax.set_xlim(self.xlim)
         self.ax.set_ylim(self.ylim)
         self.ax.set_title('Data Points')
