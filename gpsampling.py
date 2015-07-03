@@ -4,6 +4,7 @@ from __future__ import print_function, division
 import os
 import scipy as sp
 import scipy.linalg as LA
+import scipy.spatial.distance as sp_dist
 from ase.atoms import Atoms
 from ase import units
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
@@ -153,6 +154,10 @@ def get_constraint_forces(atoms, ml_model):
     return forces
 
 
+def round_vector(vec, precision = 0.05):
+    return ((vec + 0.5 * precision) / precision).astype('int') * precision 
+
+
 def verletstep(atoms, mlmodel, f, dt, mixing=[1.0, 0.0], lammpsdata=None, do_update=True):
     p = atoms.get_momenta()
     p += 0.5 * dt * f
@@ -162,15 +167,29 @@ def verletstep(atoms, mlmodel, f, dt, mixing=[1.0, 0.0], lammpsdata=None, do_upd
     # get actual forces and potential energy of configuration
     pot_energy, f0 = calc_lammps(atoms, preloaded_data=lammpsdata)
     # Accumulate the new observation in the dataset
-    mlmodel.accumulate_data(atoms.colvars(), sp.array([pot_energy]))
+    coarse_colvars = round_vector(atoms.colvars())
+    distance_from_data = sp_dist.cdist(sp.atleast_2d(coarse_colvars), mlmodel.X_fit_).ravel()
+    # check if configuration has already occurred
+    if distance_from_data.min() == 0.0:
+        index = list(distance_from_data).index(0.0)
+        # set value to minimum energy in the bin
+        if pot_energy < mlmodel.y[index]: 
+            mlmodel.y[index] = pot_energy
+            newdata = True
+        else:
+            newdata = False
+    else:
+        mlmodel.accumulate_data(coarse_colvars, sp.array([pot_energy]))
+        newdata = True
     # update ML potential if required
-    if len(mlmodel.X_fit_) > 100 and do_update:
+    if newdata:
         mlmodel.update_fit()
     # Get ML constraint forces if the model is fitted
-    if hasattr(mlmodel, 'dual_coef_'):
+    if hasattr(mlmodel, 'dual_coef_') and do_update: # and pot_energy < 0:
         fextra = - get_constraint_forces(atoms, mlmodel)
     else:
-        print("ML model not fitted yet")
+        if hasattr(mlmodel, 'dual_coef_'):
+            print("ML model not fitted yet")
         fextra = 0
     # X_near = Xplotgrid([atoms.phi() - 0.2, atoms.psi() - 0.2], [atoms.phi() - 0.2, atoms.psi() - 0.2], 2, 10)
     # y_near_mean = mlmodel.predict(X_near).mean()
@@ -208,7 +227,6 @@ def draw_2Dreconstruction(ax, mlmodel, Xnew, X_grid):
 
     ax0.set_title('Data Points')
     ax1.set_title('ML Prediction')
-    1/0
     for axx in [ax0, ax1]:
         axx.set_xlabel(r'$\phi$')
         axx.set_ylabel(r'$\psi$')
@@ -271,18 +289,18 @@ def main():
     T = 300.0
     dt = 1 * units.fs
     nsteps = 10000
-    mixing = [1.0, 1.]
-    lengthscale = .4
+    mixing = [1.0, .9]
+    lengthscale = 0.6
     gamma = 1 / (2 * lengthscale**2)
     #     mlmodel = GaussianProcess(corr='squared_exponential', 
     #         # theta0=1e-1, thetaL=1e-4, thetaU=1e+2,
     #         theta0=1., 
     #         random_start=100, normalize=False, nugget=1.0e-2)
     mlmodel = KernelRidge(kernel='rbf', 
-                          gamma=gamma, gammaL = gamma/4, gammaU=4*gamma,
+                          gamma=gamma, gammaL = gamma/4, gammaU=2*gamma,
                            alpha=1.0e-2, variable_noise=False, max_lhood=False)
-    data = sp.loadtxt('phi_psi_minener_coarse_1M_md.csv')
-    mlmodel.fit(data[:,:2], data[:,2])
+    # data = sp.loadtxt('phi_psi_minener_coarse_1M_md.csv')
+    # mlmodel.fit(data[:,:2], data[:,2])
     plt.close('all')
     plt.ion()
     fig, ax = plt.subplots(1, 2, figsize=(24, 13))
@@ -304,10 +322,10 @@ def main():
     print("START")
     
     pot_energy, f = calc_lammps(atoms, preloaded_data=lammpsdata)
-    mlmodel.accumulate_data(atoms.colvars(), sp.array([pot_energy]))
+    mlmodel.accumulate_data(round_vector(atoms.colvars()), sp.array([pot_energy]))
     printenergy(atoms, pot_energy)
-    draw_3Dreconstruction(fig3d, ax3d, mlmodel, X_grid)
-    fig3d.canvas.draw()
+    # draw_3Dreconstruction(fig3d, ax3d, mlmodel, X_grid)
+    # fig3d.canvas.draw()
     try:
         os.remove('atoms.traj')
     except:
@@ -322,7 +340,7 @@ def main():
     for istep in range(nsteps):
         
         print("Dihedral angles | phi = %.3f, psi = %.3f " % (atoms.phi(), atoms.psi()))
-        do_update = (istep in teaching_points) or (istep - nsteps == 1) # istep % 20 == 0 # 
+        do_update = (istep > 100) # (istep in teaching_points) or (istep - nsteps == 1) # istep % 20 == 0 # 
         pot_energy, f = verletstep(atoms, mlmodel, f, dt, 
                                    mixing=mixing, lammpsdata=lammpsdata, 
                                    do_update = do_update)
@@ -339,7 +357,7 @@ def main():
         #             if False: # istep > 1000:
         #                 draw_3Dreconstruction(fig3d, ax3d, mlmodel, X_grid)
         #                 fig3d.canvas.draw()
-        if istep % 300 == 0:
+        if istep % 10 == 0 and hasattr(mlmodel, 'dual_coef_'):
             draw_2Dreconstruction(ax, mlmodel, atoms.colvars().ravel(), X_grid)
             fig.canvas.draw()
         traj_buffer.append(atoms.copy())
