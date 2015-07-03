@@ -52,7 +52,7 @@ def grid(x, y, z, resX=100, resY=100):
 
 
 def round_vector(vec, precision = 0.05):
-    return (vec / precision).astype('int') * precision + 0.5 * precision
+    return ((vec + 0.5 * precision)/ precision).astype('int') * precision
 
 ### CODE STARTS HERE ###
 
