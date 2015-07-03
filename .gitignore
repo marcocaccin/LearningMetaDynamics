@@ -34,3 +34,8 @@ PotEng.md
 *.DEFAULT
 
 data.input
+
+*.png
+
+*.pkl
+*.mp4
