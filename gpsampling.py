@@ -25,6 +25,7 @@ from matplotlib.ticker import LinearLocator, FormatStrFormatter
 # from ase.calculators.cp2k import CP2K
 # from ase.calculators.lj import LennardJones
 # from ase.calculators.lammpsrun import LAMMPS
+import PES_plotting as pl
 
 
 ##### Levi-Civita symbol used for Theano cross product #####
@@ -203,62 +204,6 @@ def verletstep(atoms, mlmodel, f, dt, mixing=[1.0, 0.0], lammpsdata=None, do_upd
     
     atoms.set_momenta(atoms.get_momenta() + 0.5 * dt * f)
     return pot_energy, f
-    
-    
-def draw_2Dreconstruction(ax, mlmodel, Xnew, X_grid):
-    
-    ax0, ax1 = ax
-    y_grid = mlmodel.predict(X_grid)
-    
-    y_grid[y_grid > mlmodel.y.max() + 0.2] = mlmodel.y.max() + 0.2
-    y_grid[y_grid < mlmodel.y.min() - 0.2] = mlmodel.y.min() - 0.2
-    
-    ax0.clear()
-    ax0.scatter(mlmodel.X_fit_[:,0], mlmodel.X_fit_[:,1], marker = 'o', s = 50, c = mlmodel.y, 
-                cmap = cm.RdBu, alpha = .5, edgecolors='none')    
-    ax1.clear()
-    ax1.scatter(X_grid[:,0], X_grid[:,1], s = 200, c = y_grid, 
-                cmap = cm.RdBu, alpha = 1, edgecolors='none', marker='s')
-    ax1.scatter(Xnew[0], Xnew[1], marker='h', s = 400, c = 'g', alpha = 0.5)
-    
-    gradnew = mlmodel.predict_gradient(sp.atleast_2d(Xnew)).ravel()
-    gradnew /= LA.norm(gradnew)
-    ax1.arrow(Xnew[0], Xnew[1], gradnew[0], gradnew[1], head_width=0.05, head_length=0.1, fc='k', ec='k')
-
-    ax0.set_title('Data Points')
-    ax1.set_title('ML Prediction')
-    for axx in [ax0, ax1]:
-        axx.set_xlabel(r'$\phi$')
-        axx.set_ylabel(r'$\psi$')
-        axx.set_xlim(0, 2*sp.pi)
-        axx.set_ylim(0, 2*sp.pi)
-
-
-def draw_3Dreconstruction(fig, ax, mlmodel, X_grid):
-    
-    y_grid = mlmodel.predict(X_grid)
-    y_grid[y_grid > mlmodel.y.max() + 0.2] = mlmodel.y.max() + 0.2
-    y_grid[y_grid < mlmodel.y.min() - 0.2] = mlmodel.y.min() - 0.2
-    ax.clear()
-    
-    X0, X1 = sp.unique(X_grid[:,0]), sp.unique(X_grid[:,1])
-    X0, X1 = sp.meshgrid(X0, X1)
-    y_grid = y_grid.reshape(X0.shape)
-    surf = ax.plot_surface(X0, X1, y_grid, rstride=1, cstride=1, cmap=cm.RdBu,
-                           linewidth=0, antialiased=False)
-    ax.set_xlabel(r'$\phi$')
-    ax.set_ylabel(r'$\psi$')
-    ax.set_title('ML Prediction')
-    ax.zaxis.set_major_formatter(FormatStrFormatter('%.02e'))
-    # fig.colorbar(surf, shrink=0.5, aspect=5)
-    ax.set_xlim(0, 2*sp.pi)
-    ax.set_ylim(0, 2*sp.pi)
-
-
-def Xplotgrid(Xmin, Xmax, n_features, n_pts):
-    X_grid = [sp.linspace(Xmin[i], Xmax[i], n_pts) for i in range(n_features)]
-    X_grid = sp.meshgrid(*X_grid)
-    return sp.vstack([x.ravel() for x in X_grid]).reshape(n_features,-1).T 
 
 
 def printenergy(atoms, epot, step=-1):  # store a reference to atoms in the definition.
@@ -288,7 +233,7 @@ def main():
     
     T = 300.0
     dt = 1 * units.fs
-    nsteps = 10000
+    nsteps = 200
     mixing = [1.0, .9]
     lengthscale = 0.6
     gamma = 1 / (2 * lengthscale**2)
@@ -304,8 +249,6 @@ def main():
     plt.close('all')
     plt.ion()
     fig, ax = plt.subplots(1, 2, figsize=(24, 13))
-    X_grid = Xplotgrid(sp.array([0., 0.]), 2 * sp.pi * sp.array([1., 1.]), 2, 70)
-    
     
     atoms = ase.io.read('myplum.xyz')
     with open('data.input', 'r') as file:
@@ -357,9 +300,19 @@ def main():
         #             if False: # istep > 1000:
         #                 draw_3Dreconstruction(fig3d, ax3d, mlmodel, X_grid)
         #                 fig3d.canvas.draw()
-        if istep % 10 == 0 and hasattr(mlmodel, 'dual_coef_'):
-            draw_2Dreconstruction(ax, mlmodel, atoms.colvars().ravel(), X_grid)
-            fig.canvas.draw()
+        if 'datasetplot' not in locals():
+            datasetplot = pl.Plot_datapts(ax[0], mlmodel)
+        else:
+            datasetplot.update()
+        fig.canvas.draw()
+        if hasattr(mlmodel, 'dual_coef_'):
+            if 'my2dplot' not in locals():
+                my2dplot = pl.Plot_energy_n_point(ax[1], mlmodel, atoms.colvars().ravel())
+            else:
+                my2dplot.update_prediction()
+                my2dplot.update_current_point(atoms.colvars().ravel())
+
+
         traj_buffer.append(atoms.copy())
         if istep % 100 == 0:
             for at in traj_buffer:
