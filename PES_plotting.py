@@ -19,7 +19,7 @@ class Plot_energy_n_point:
         Z[Z < zmin] = zmin
         Z = Z.reshape(self.X.shape)
         self.meshplot = ax.pcolormesh(self.X, self.Y, Z, cmap = cm.RdBu, alpha = 0.8,
-                                      edgecolors='None', vmin = -1., vmax = 0.5)
+                                      edgecolors='None', vmin = -1., vmax = 0.5, rasterized=True)
         
         self.scatterplot = ax.scatter(current_point[0], current_point[1], marker='h', 
                                       s = 400, c = 'g', alpha = 0.5)
