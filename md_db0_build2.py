@@ -1,3 +1,9 @@
+"""
+This script runs an unbiased LAMMPS MD simulation, and stores the values of CVs along with
+their corresponding potential and kinetic energies.
+After that, the CVs are meshed at a given precision and the thermodynamical observables 
+such as F, E_min, TS and more are calculated from the values of PotEng.
+"""
 from __future__ import division, print_function
 import scipy as sp
 import scipy.linalg as LA
@@ -28,7 +34,15 @@ def psi_(self, dihedral_list=dihedral_atoms_psi):
     return self.get_dihedral(dihedral_list)
 
 
-def colvars_(self):
+def set_phi_(self, phi):
+    self.set_dihedral(dihedral_atoms_phi, phi, indices=fun_group_phi)
+
+
+def set_psi_(self, psi):
+    self.set_dihedral(dihedral_atoms_psi, psi, indices=fun_group_psi)
+
+
+def colvars(self):
     s = sp.atleast_2d(sp.array([self.phi(), self.psi()]))
     return s
 
@@ -44,17 +58,17 @@ def grid(x, y, z, resX=100, resY=100):
 
 
 def round_vector(vec, precision = 0.05):
-    return ((vec + 0.5 * precision)/ precision).astype('int') * precision
+    return ((vec + 0.5 * precision) / precision).astype('int') * precision 
 
 ### CODE STARTS HERE ###
 
-run_from_scratch = False
+run_from_scratch = True
 T = 300
 
 if run_from_scratch:
     setattr(Atoms, 'phi', phi_)
     setattr(Atoms, 'psi', psi_)
-    setattr(Atoms, 'colvars', colvars_)
+    setattr(Atoms, 'colvars', colvars)
 
     os.system('lmp_mpi < input_md')
 
@@ -76,7 +90,11 @@ if run_from_scratch:
     print("Reading potential energies...")
     os.system('grep PotEng log.lammps | awk {\'print $3\'} > PotEng.md')
     energies = sp.loadtxt('PotEng.md')
+    os.system('grep KinEng log.lammps | awk {\'print $6\'} > KinEng.md')
+    kineng = sp.loadtxt('KinEng.md')
     energies *= units.kcal / units.mol
+    kineng *= units.kcal / units.mol
+
 
     # now extract CVs from positions
 
@@ -88,41 +106,72 @@ if run_from_scratch:
     colvars = sp.asarray(colvars)
 
 
-    phipsi_pot = sp.hstack((colvars,energies[:,None]))
+    phipsi_pot_kin = sp.hstack((colvars, energies[:,None], kineng[:,None]))
+    
     print("Saving data...")
-    sp.savetxt('phi_psi_pot_md300.csv', phipsi_pot)
+    sp.savetxt('phi_psi_pot_kin_md300.csv', phipsi_pot_kin)
 else:
+#     try:
+#         with open('energies.pkl', 'r') as file:
+#             energies_r = pkl.load(file)
+#     except:    
     data = sp.loadtxt('phi_psi_pot_md300.csv')
     colvars = data[:,:2]
     energies = data[:,2]
+    kineng = data[:,4]
 
 colvars_r = round_vector(colvars)
-energies_r = {}
+
+phimin, phimax = 0, 2*sp.pi
+psimin, psimax = 0, 2*sp.pi
+phirange = phimax - phimin
+psirange = psimax - psimin
+aspect_ratio = psirange/phirange
+
+first = True
+# for imax in range(445200, len(energies), 100):
+# imax = 111
+print("%09d" % imax)
+if first:
+    energies_r = {}
+    kineng_r = {}
+
+    first = False
 for i, s in enumerate(colvars_r):
     if ('%f-%f' % (s[0], s[1])) in energies_r.keys():
         energies_r['%f-%f' % (s[0], s[1])].append(energies[i])
+        kineng_r['%f-%f' % (s[0], s[1])].append(kineng[i])
+
     else:
         energies_r['%f-%f' % (s[0], s[1])] = [energies[i]]
+        kineng_r['%f-%f' % (s[0], s[1])] = [kineng[i]]
 
 colvars_2 = []
 energies_mean = []
 energies_min = []
 n_confs = []
 free_energies = []
-
+meanpot = []
+zeta = []
+zeta_reduced = []
 for s, energy in energies_r.iteritems():
+    kin = sp.array(kineng_r[s])
     energy = sp.array(energy)
     colvars_2.append(sp.array(s.split('-')).astype('float'))
-    energies_mean.append(energy.mean())
-    energies_min.append(energy.min())
-    n_confs.append(len(energy))
-    free_energies.append(- units.kB * T * sp.log(sp.exp(-energy / (units.kB * T)).sum()))
+    meanpot.append(sp.exp(- kin / (units.kB * T)).sum())
+    zeta.append(sp.exp(- (energy + kin) / (units.kB * T)).sum())
+    zeta_reduced.append(sp.exp(- energy / (units.kB * T)).sum())
+#
+colvars_2 = sp.array(colvars_2)
+# n_confs = sp.array(n_confs)
+# energies_min = sp.array(energies_min)
+# energies_mean = sp.array(energies_mean)
+free_energies = - units.kB * T * sp.log(zeta_reduced)
+meanpot = units.kB * T * sp.log(meanpot)
+free_en_approx = meanpot / zeta
+free_en_approx -= free_en_approx.mean() # shift zero value
 
 colvars_2 = sp.array(colvars_2)
-n_confs = sp.array(n_confs)
-energies_min = sp.array(energies_min)
-energies_mean = sp.array(energies_mean)
-free_energies = sp.array(free_energies)
 
 
 phi, psi = colvars_2[:,0], colvars_2[:,1]
@@ -130,7 +179,7 @@ phimin, phimax = phi.min(), phi.max()
 psimin, psimax = psi.min(), psi.max()
 phirange = phimax - phimin
 psirange = psimax - psimin
-aspect_ratio = psirange/phirange
+aspect_ratio = psirange / phirange
 print("Plotting trajectory...")
 # fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
 # sc = ax.scatter(phi, psi, c=energies_mean, marker = 's', s = 120,
@@ -138,18 +187,18 @@ print("Plotting trajectory...")
 # ax.set_xlim(phimin, phimax)
 # ax.set_ylim(psimin, psimax)
 # plt.colorbar(sc, format='%.3e')
-# fig.savefig('energy_mean.png')
-# ax.clear()
-
-fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
-sc = ax.scatter(phi, psi, c=energies_min, marker = 's', s = 120,
-           cmap = 'RdBu', alpha = .8, edgecolors='none')
-ax.set_xlim(phimin, phimax)
-ax.set_ylim(psimin, psimax)
-plt.colorbar(sc, format='%.3e')
-fig.savefig('energy_min.png')
-ax.clear()
-
+# fig.savefig('energy_mean-%09d.png' %imax)
+# 
+# plt.close()
+# fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
+# sc = ax.scatter(phi, psi, c=energies_min, marker = 's', s = 120,
+#            cmap = 'RdBu', alpha = .8, edgecolors='none')
+# ax.set_xlim(phimin, phimax)
+# ax.set_ylim(psimin, psimax)
+# plt.colorbar(sc, format='%.3e')
+# fig.savefig('energy_min-%09d.png' % imax)
+# 
+# plt.close()
 fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
 sc = ax.scatter(phi, psi, c=free_energies, marker = 's', s = 120,
            cmap = 'RdBu', alpha = .8, edgecolors='none')
@@ -157,30 +206,32 @@ ax.set_xlim(phimin, phimax)
 ax.set_ylim(psimin, psimax)
 plt.colorbar(sc, format='%.3e')
 fig.savefig('free_energy.png')
-ax.clear()
 
-
+plt.close()
 fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
-sc = ax.scatter(phi, psi, c=(energies_min - free_energies), marker = 's', s = 120,
+sc = ax.scatter(phi, psi, c=free_en_approx, marker = 's', s = 120,
            cmap = 'RdBu', alpha = .8, edgecolors='none')
 ax.set_xlim(phimin, phimax)
 ax.set_ylim(psimin, psimax)
 plt.colorbar(sc, format='%.3e')
-fig.savefig('TS_min.png')
-ax.clear()
+fig.savefig('free_energy_sandro.png')
+# 
+# plt.close()
 # fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
 # sc = ax.scatter(phi, psi, c=energies_min-free_energies, marker = 's', s = 120,
 #            cmap = 'RdBu', alpha = .8, edgecolors='none')
 # ax.set_xlim(phimin, phimax)
 # ax.set_ylim(psimin, psimax)
 # plt.colorbar(sc, format='%.3e')
-# fig.savefig('TS_min.png')
-# ax.clear()
+# fig.savefig('TS_min-%09d.png' % imax)
 # 
+# plt.close()
 # fig, ax = plt.subplots(1,1,figsize=(10,10*aspect_ratio))
 # sc = ax.scatter(phi, psi, c=energies_mean-free_energies, marker = 's', s = 120,
 #            cmap = 'RdBu', alpha = .8, edgecolors='none')
 # ax.set_xlim(phimin, phimax)
 # ax.set_ylim(psimin, psimax)
 # plt.colorbar(sc, format='%.3e')
-# fig.savefig('TS_mean.png')
+# fig.savefig('TS_mean-%09d.png' %imax)
+# plt.close()
+# 
