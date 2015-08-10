@@ -68,7 +68,7 @@ def where_a_in_b(a, b):
     return indices
 
 
-class ignorance_field:
+class IgnoranceField:
     def __init__(self, X_grid, y_threshold=1.0e-1, **kwargs):
         """
         Parameters:
@@ -89,7 +89,10 @@ class ignorance_field:
             Grid spacing between points in X
         boundaries: array_like, shape(n_features,)
             max - min in each direction of X
+        cutoff: real, > 0
+            distance within which points are interacting with current point.
         """
+
         self.X_grid = X_grid # 2D array: [[x0min, x0max],...,[xNmin, xNmax]] 
         self.y_threshold = y_threshold
 
@@ -107,7 +110,22 @@ class ignorance_field:
         """
         On a given grid in the X plane, set the values in y and 
         the ignorance for each value.
+
+        Parameters:
+        ----------
+        y_grid: array_like, shape (n_samples,)
+            Array of scalar-valued function on the grid points X_grid that
+            determines the "cost" of each point. If cost > threshold, the point forms a wall
+        n_grid: array_like, shape (n_samples,)
+            Array of scalar-valued function on the grid points X_grid that
+            sets the ignorance level for each point. Higher values attract more.
+            
+        Other properties:
+        ----------
+        wall: array_like, shape (n_samples,), type boolean
+           Denotes the presence or not of a wall for each point in X_grid.
         """
+
         assert len(self.X_grid) == len(y_grid)
         if n_grid is None or y_grid.shape != n_grid.shape:
             n_grid = sp.ones(y_grid.shape)
@@ -118,24 +136,29 @@ class ignorance_field:
 
     def distance_vectors_not_walled(self, X0):
         """
+        Parameters:
+        ----------
+        X0: array_like, shape (n_features,)
+            Point with respect to which the ignorance is calculated.
+
         Returns:
         ----------
-        dist_vs: array_like, shape (n_vecs, n_features)
+        vectors_mic: array_like, shape (n_vecs, n_features)
             Array of distance vectors connecting point X0 and
             points on a grid self.X_grid which do not cross a
             region for which y > threshold.
         dists: array_like, shape (n_vecs,)
             Euclidean length of vectors in dist_vs
-        no_wall_indices: array_like, shape (n_vecs,)
-            Indices of points in self.X_grid that do not have a wall
-            between them and X0
+        n_grid: array_like, shape (n_vecs,)
+            Ignorance value for each vectors in vectors_mic.
         """
 
-        # distance vectors between current point X0 and all points on a grid
+        # distance vectors between current point X0 and all points on a grid,
+        # calculated in PBC minimum image convention.
         vectors_mic, shifts = v2min_image_v(
             self.X_grid - X0, self.boundaries, shifts_out=True)
+        # norms of distance vectors
         dists = sp.array(map(sp.linalg.norm, vectors_mic))
-        # dists[dists == 0.] = self.X_grid_spacing # avoid NaN
         if self.cutoff is not None:
             mask = dists <= self.cutoff
             vectors_mic = vectors_mic[mask]
@@ -145,13 +168,17 @@ class ignorance_field:
         else:
             wall = self.wall
             n_grid = self.n_grid
-        # for each vector, see if it crosses a region with high y value
+        # vectors which contain a wall
         X_wall = vectors_mic[wall]
+        # distances between each wall point and X0
         X_wall_dists = sp.array(map(LA.norm, X_wall))
+        # indices of vectors that are in the direction of a wall
         cosines = spdist.cdist(vectors_mic, X_wall, metric='cosine')
         wall_direction = sp.where(cosines < 1.0e-3) # arbitrary tolerance
         # element by element comparison: is point beyond the wall or not?
-        beyond_walls = (X_wall_dists[wall_direction[1]] <= dists[wall_direction[0]]) 
+        beyond_walls = (X_wall_dists[wall_direction[1]] <= dists[wall_direction[0]])
+        # indices of points that are in the direction of a wall, and their distances 
+        # are larger that the distance of the corresponding wall point.
         walled_indices = wall_direction[0][sp.where(beyond_walls)[0]]
         all_indices = sp.arange(len(vectors_mic))
         no_wall_indices = sp.array(list(set(all_indices) - set(walled_indices)))
@@ -162,14 +189,25 @@ class ignorance_field:
         return vectors_mic, dists, n_grid
 
 
-    def get_ignorance_force(self, X0):
-        
+    def get_force(self, X0, direction_only=True):
+        """
+        Parameters:
+        ----------
+        X0: array_like, shape (n_features,)
+            Point with respect to which the ignorance is calculated.
+
+        Returns:
+        ----------
+        field: array_like, shape (n_features,)
+            Force vector pointing towards the direction of maximum ignorance.
+        """
         dvecs, dnorms, ignorances = self.distance_vectors_not_walled(X0)
         # weights can be substituted with something less naive than
         # number of times the simulation crossed a point, i.e. MSE
-        # Electrostatic-like field: sum_i q_i / |r_i|**3 * r_i
+        # Electrostatic-like field: \sum_i q_i / |r_i|^3 * \mathbf{r}_i
         field = ((ignorances / dnorms**3)[:,None] * dvecs).sum(axis=0)
-        # field /= LA.norm(field)
+        if direction_only:
+            field /= LA.norm(field)
         return field
 
 
