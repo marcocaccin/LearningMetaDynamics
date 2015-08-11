@@ -104,6 +104,9 @@ class IgnoranceField:
         boundaries_inferred = sp.array([x.max() - x.min() for x in X_grid.T])
         self.boundaries = kwargs.get('boundaries', boundaries_inferred)
         self.cutoff = kwargs.get('cutoff', None)
+        self.y_grid = self.y_threshold * sp.ones(len(X_grid)) - 0.1
+        self.n_grid = sp.ones(self.y_grid)
+        self.wall = sp.zeros(self.y_grid, dtype=bool)
 
 
     def set_cost_grid(self, y_grid, n_grid=None):
@@ -132,6 +135,21 @@ class IgnoranceField:
         self.y_grid = y_grid.flatten()
         self.n_grid = n_grid
         self.wall = (y_grid > self.y_threshold)
+
+
+    def update_cost(self, X, y):
+        """
+        For an ignorance function 1/N, where N is number of times
+        the system passed on a point X, update ignorance and wall.
+        +1 the n_grid
+        """
+        X = X.flatten()
+        X_coarse = round_vector(X)
+        grid_index = where_a_in_b(X_coarse, self.X_grid).item()
+        self.y_grid[index] = y
+        self.wall[index] = (y > self.y_threshold)
+        ignorance = self.n_grid[index]
+        self.n_grid[index] = 1. / (1. / self.n_grid[index] + 1)
 
 
     def distance_vectors_not_walled(self, X0):
@@ -189,7 +207,7 @@ class IgnoranceField:
         return vectors_mic, dists, n_grid
 
 
-    def get_force(self, X0, direction_only=True):
+    def get_forces(self, X0, direction_only=True):
         """
         Parameters:
         ----------
