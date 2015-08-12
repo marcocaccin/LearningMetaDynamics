@@ -15,13 +15,15 @@ from lammps2py_interface import calc_lammps
 from sklearn.kernel_ridge import KernelRidge
 import pdb
 from matplotlib import pyplot as plt
-# from ase.md.langevin import Langevin
+from ase.md.langevin import Langevin
+from ase.md.verlet import VelocityVerlet
+import MDPropagators_addons as MDplus
 # from ase.calculators.cp2k import CP2K
 # from ase.calculators.lj import LennardJones
 # from ase.calculators.lammpsrun import LAMMPS
 import PES_plotting as pl
 from ignorance_field import IgnoranceField
-# from MDPropagators import MLLangevin
+
 
 
 ##### Levi-Civita symbol used for Theano cross product #####
@@ -180,235 +182,6 @@ def round_vector(vec, precision = 0.05):
     return ((vec + 0.5 * precision) / precision).astype('int') * precision 
 
 
-class MLVerlet:
-    def __init__(self, atoms, timestep, temperature, do_vrescaling=True):
-        self.atoms = atoms
-        self.dt = timestep
-        self.temp = temperature
-        self.do_vrescaling = do_vrescaling
-        
-    def rescale_velocities(self):
-        T = self.atoms.get_kinetic_energy() / (1.5 * units.kB * len(self.atoms))
-        self.atoms.set_momenta(self.atoms.get_momenta() * (self.temp / T)**0.5)
-        
-    def step(self, forces, mlmodel, mixing=[1.0, 0.0], lammpsdata=None, do_update=False):
-        
-        atoms = self.atoms
-        dt = self.dt
-        p = atoms.get_momenta()
-        f = forces[0] + forces[1]
-        p += 0.5 * dt * f
-        atoms.set_positions(atoms.get_positions() +
-                            dt * p / atoms.get_masses()[:,None])
-        atoms.set_momenta(p)
-        # get actual forces and potential energy of configuration
-        pot_energy, f0 = calc_lammps(atoms, preloaded_data=lammpsdata)
-        # Accumulate the new observation in the dataset
-        coarse_colvars = round_vector(atoms.colvars())
-        distance_from_data = sp_dist.cdist(sp.atleast_2d(coarse_colvars), mlmodel.X_fit_).ravel()
-        # check if configuration has already occurred
-        if distance_from_data.min() == 0.0:
-            index = list(distance_from_data).index(0.0)
-            beta = 1 / (units.kB * self.temp)
-            mlmodel.y[index] += - 1 / beta * sp.log(1 + sp.exp(- beta * (pot_energy - mlmodel.y[index])))
-        else:
-            mlmodel.accumulate_data(coarse_colvars, sp.array([pot_energy]))
-            newdata = True
-        # update ML potential if required
-        if do_update:
-            mlmodel.update_fit()
-        # Get ML constraint forces if the model is fitted
-        if hasattr(mlmodel, 'dual_coef_') and do_update: # and pot_energy < 0:
-            fextra = - get_constraint_forces(atoms, mlmodel)
-        else:
-            if hasattr(mlmodel, 'dual_coef_'):
-                print("ML model not fitted yet")
-            fextra = sp.zeros(f0.shape)
-        # X_near = Xplotgrid([atoms.phi() - 0.2, atoms.psi() - 0.2], [atoms.phi() - 0.2, atoms.psi() - 0.2], 2, 10)
-        # y_near_mean = mlmodel.predict(X_near).mean()
-        # if pot_energy < y_near_mean:
-        #             mix = 1.2
-        #         else:
-        #             mix = 0.8
-        
-        # Compose the actual and the ML forces together by mixing them accordingly
-        forces = [mixing[0] * f0, - mixing[1] * fextra]
-        f = forces[0] + forces[1]
-        atoms.set_momenta(atoms.get_momenta() + 0.5 * dt * f)
-        # velocity rescale: rudimental thermostat
-        if self.do_vrescaling:
-            self.rescale_velocities()
-        return pot_energy, [mixing[0] * f0, - mixing[1] * fextra]
-
-
-class MLLangevin:
-    """Langevin (constant N, V, T) molecular dynamics.
-
-    atoms
-        The list of atoms.
-        
-    dt
-        The time step.
-
-    temperature
-        The desired temperature, in energy units (kB*T) 
-
-    friction
-        A friction coefficient, typically 1e-4 to 1e-2.
-
-    fixcm
-        If True, the position and momentum of the center of mass is
-        kept unperturbed.  Default: True.
-
-    The temperature and friction are normally scalars, but in principle one
-    quantity per atom could be specified by giving an array.
-    
-    Example: Langevin(atoms, 1.0*units.fs, 300*units.kB, 1.0e-2)
-    """
-    def __init__(self, atoms, timestep, temperature, friction, mlmodel, fixcm=True):
-        self.atoms = atoms
-        self.dt = timestep
-        self.temp = temperature
-        self.frict = friction
-        self.masses = self.atoms.get_masses()
-        self.fixcm = fixcm  # will the center of mass be held fixed?
-        self.updatevars()
-        
-    def set_temperature(self, temperature):
-        self.temp = temperature
-        self.updatevars()
-
-    def set_friction(self, friction):
-        self.frict = friction
-        self.updatevars()
-
-    def set_timestep(self, timestep):
-        self.dt = timestep
-        self.updatevars()
-
-    def updatevars(self):
-        dt = self.dt
-        # If the friction is an array some other constants must be arrays too.
-        self._localfrict = hasattr(self.frict, 'shape')
-        lt = self.frict * dt
-        masses = self.masses
-        sdpos = dt * sp.sqrt(self.temp / masses.reshape(-1) * (2.0/3.0 - 0.5 * lt) * lt)
-        sdpos.shape = (-1, 1)
-        sdmom = sp.sqrt(self.temp * masses.reshape(-1) * 2.0 * (1.0 - lt) * lt)
-        sdmom.shape = (-1, 1)
-        pmcor = sp.sqrt(3.0)/2.0 * (1.0 - 0.125 * lt)
-        cnst = sp.sqrt((1.0 - pmcor) * (1.0 + pmcor))
-
-        act0 = 1.0 - lt + 0.5 * lt * lt
-        act1 = (1.0 - 0.5 * lt + (1.0/6.0) * lt * lt)
-        act2 = 0.5 - (1.0/6.0) * lt + (1.0/24.0) * lt * lt
-        c1 = act1 * dt / masses.reshape(-1)
-        c1.shape = (-1, 1)
-        c2 = act2 * dt * dt / masses.reshape(-1)
-        c2.shape = (-1, 1)
-        c3 = (act1 - act2) * dt
-        c4 = act2 * dt
-        del act1, act2
-        if self._localfrict:
-            # If the friction is an array, so are these
-            act0.shape = (-1, 1)
-            c3.shape = (-1, 1)
-            c4.shape = (-1, 1)
-            pmcor.shape = (-1, 1)
-            cnst.shape = (-1, 1)
-        self.sdpos = sdpos
-        self.sdmom = sdmom
-        self.c1 = c1
-        self.c2 = c2
-        self.act0 = act0
-        self.c3 = c3
-        self.c4 = c4
-        self.pmcor = pmcor
-        self.cnst = cnst
-        self.natoms = self.atoms.get_number_of_atoms()
-    
-    
-    def step(self, forces, mlmodel, extfield=None, mixing=[1.0, 0.0], lammpsdata=None, do_update=False):
-        atoms = self.atoms
-        p = self.atoms.get_momenta()
-        f = sp.sum(forces, axis = 0)
-        
-        random1 = sp.random.standard_normal(size=(len(atoms), 3))
-        random2 = sp.random.standard_normal(size=(len(atoms), 3))
-        
-        rrnd = self.sdpos * random1
-        prnd = (self.sdmom * self.pmcor * random1 +
-                self.sdmom * self.cnst * random2)
-        
-        if self.fixcm:
-            rrnd = rrnd - sp.sum(rrnd, 0) / len(atoms)
-            prnd = prnd - sp.sum(prnd, 0) / len(atoms)
-            rrnd *= sp.sqrt(self.natoms / (self.natoms - 1.0))
-            prnd *= sp.sqrt(self.natoms / (self.natoms - 1.0))
-        
-        self.atoms.set_positions(self.atoms.get_positions() +
-                            self.c1 * p +
-                            self.c2 * f + rrnd)
-        p *= self.act0
-        p += self.c3 * f + prnd
-        self.atoms.set_momenta(p)
-                      
-        # get actual forces and potential energy of configuration
-        pot_energy, forces = calc_lammps(atoms, preloaded_data=lammpsdata)
-        forces = [forces]
-        ### ML IS HERE ###
-        # Accumulate the new observation in the dataset
-        coarse_colvars = round_vector(self.atoms.colvars())
-        distance_from_data = sp_dist.cdist(
-            sp.atleast_2d(coarse_colvars), mlmodel.X_fit_).ravel()
-        # check if configuration has already occurred
-        if distance_from_data.min() == 0.0:
-#         if newdata and do_update:
-#             mlmodel.update_fit()
-#             # set value to minimum energy in the bin
-#             if pot_energy < mlmodel.y[index]: 
-#                 mlmodel.y[index] = pot_energy
-#                 do_update = True and do_update
-#             else
-#                 do_update = False
-            index = list(distance_from_data).index(0.0)
-            beta = 1 / self.temp
-            mlmodel.y[index] += - 1 / beta * sp.log(
-                1 + sp.exp(- beta * (pot_energy - mlmodel.y[index])))
-            pot_energy = mlmodel.y[index]
-        else:
-            mlmodel.accumulate_data(coarse_colvars, pot_energy)
-        if do_update:
-            # update ML potential with all the data contained in it.
-            mlmodel.update_fit()
-        # Get ML constraint forces if the model is fitted
-        if hasattr(mlmodel, 'dual_coef_') and pot_energy < 0:
-            forces.append(get_constraint_forces(atoms, mlmodel))
-        else:
-            forces.append(sp.zeros(f0.shape))
-        # X_near = Xplotgrid([atoms.phi() - 0.2, atoms.psi() - 0.2], [atoms.phi() - 0.2, atoms.psi() - 0.2], 2, 10)
-        # y_near_mean = mlmodel.predict(X_near).mean()
-        # if pot_energy < y_near_mean:
-        #             mix = 1.2
-        #         else:
-        #             mix = 0.8
-
-        # EXTERNAL FIELD IS HERE
-        if extfield is not None:
-            colvars = round_vector(self.atoms.colvars())
-            extfield.update_cost(colvars, pot_energy) 
-            extfield_forces = get_extfield_forces(self.atoms, extfield)
-            extfield_forces /= sp.mean(map(LA.norm, extfield_forces))
-            forces.append(extfield_forces)
-        # Compose the actual and the ML forces together by mixing them accordingly
-        # a [1,-1] mixing would result, in the perfect fitting limit, to a zero
-        # mean field motion.
-        forces = [m_i * f_i for m_i, f_i in zip(mixing, forces)]
-        f = sp.sum(forces, axis = 0)
-        self.atoms.set_momenta(self.atoms.get_momenta() + self.c4 * f)
-        return pot_energy, forces
-
-
 def printenergy(atoms, epot, step=-1):  # store a reference to atoms in the definition.
     """Function to print the potential, kinetic and total energy."""
     ekin = atoms.get_kinetic_energy() / len(atoms)
@@ -432,13 +205,73 @@ def initialise_env():
     if "OMP_NUM_THREADS" not in os.environ:
         os.environ['OMP_NUM_THREADS'] = '1'
 
+    setattr(VelocityVerlet, 'halfstep_1of2', MDplus.Verlet_halfstep_1of2)
+    setattr(VelocityVerlet, 'halfstep_2of2', MDplus.Verlet_halfstep_2of2)
+    setattr(Langevin, 'halfstep_1of2', MDplus.Langevin_halfstep_1of2)
+    setattr(Langevin, 'halfstep_2of2', MDplus.Langevin_halfstep_2of2)
+
+
+def get_all_forces(atoms, mlmodel, extfield=None, mixing=[1.,0.,0.], lammpsdata=None, do_update=False):
+    # get actual forces and potential energy of configuration
+    pot_energy, forces = calc_lammps(atoms, preloaded_data=lammpsdata)
+    forces = [forces]
+    ### ML IS HERE ###
+    # Accumulate the new observation in the dataset
+    coarse_colvars = round_vector(atoms.colvars())
+    distance_from_data = sp_dist.cdist(
+        sp.atleast_2d(coarse_colvars), mlmodel.X_fit_).ravel()
+    # check if configuration has already occurred
+    if distance_from_data.min() == 0.0:
+        index = list(distance_from_data).index(0.0)
+        # Learn E_min: uncomment this
+        if pot_energy < mlmodel.y[index]: 
+            mlmodel.y[index] = pot_energy
+        else:
+            do_update = False
+#             # Learn F: uncomment this
+#             beta = 1 / self.temp
+#             mlmodel.y[index] += - 1 / beta * sp.log(
+#                 1 + sp.exp(- beta * (pot_energy - mlmodel.y[index])))
+#             pot_energy = mlmodel.y[index]
+    else:
+        mlmodel.accumulate_data(coarse_colvars, pot_energy)
+    if do_update:
+        # update ML potential with all the data contained in it.
+        mlmodel.update_fit()
+    # Get ML constraint forces if the model is fitted
+    if hasattr(mlmodel, 'dual_coef_') and pot_energy < 0:
+        forces.append(get_constraint_forces(atoms, mlmodel))
+    else:
+        forces.append(sp.zeros(forces[0].shape))
+    # X_near = Xplotgrid([atoms.phi() - 0.2, atoms.psi() - 0.2], [atoms.phi() - 0.2, atoms.psi() - 0.2], 2, 10)
+    # y_near_mean = mlmodel.predict(X_near).mean()
+    # if pot_energy < y_near_mean:
+    #             mix = 1.2
+    #         else:
+    #             mix = 0.8
+
+    # EXTERNAL FIELD IS HERE
+    if extfield is not None:
+        colvars = round_vector(atoms.colvars())
+        extfield.update_cost(colvars, pot_energy) 
+        extfield_forces = get_extfield_forces(atoms, extfield)
+        extfield_forces /= sp.mean(map(LA.norm, extfield_forces))
+        extfield_forces *= sp.mean(map(LA.norm, forces[0]))
+        forces.append(extfield_forces)
+    # Compose the actual and the ML forces together by mixing them accordingly
+    # a [1,-1] mixing would result, in the perfect fitting limit, to a zero
+    # mean field motion.
+    forces = [m_i * f_i for m_i, f_i in zip(mixing, forces)]
+    f = sp.sum(forces, axis=0)
+    return f, pot_energy, forces
+
 
 def main():
     
     T = 300.0 # Simulation temperature
     dt = 1 * units.fs # MD timestep
-    nsteps = 5000 # MD number of steps
-    mixing = [1.0, -1.0, 0.5] # mixing weights for "real" and ML forces
+    nsteps = 1000 # MD number of steps
+    mixing = [1.0, -0.0, 0.0] # mixing weights for "real" and ML forces
     lengthscale = 0.6 # KRR Gaussian width.
     gamma = 1 / (2 * lengthscale**2)
     #     mlmodel = GaussianProcess(corr='squared_exponential', 
@@ -448,9 +281,9 @@ def main():
     mlmodel = KernelRidge(kernel='rbf', 
                           gamma=gamma, gammaL = gamma/4, gammaU=2*gamma,
                            alpha=5.0e-2, variable_noise=False, max_lhood=False)
-    anglerange = np.arange(0, 6.3, 0.05)
-    X_grid = np.array([[np.array([x,y]) for x in anglerange]
-                       for y in anglerange]).reshape((126**2, 2))
+    anglerange = sp.arange(0, 2*sp.pi + 0.05, 0.05)
+    X_grid = sp.array([[sp.array([x,y]) for x in anglerange]
+                       for y in anglerange]).reshape((len(anglerange)**2, 2))
     ext_field = IgnoranceField(X_grid, y_threshold=1.0e-1, cutoff = 3.)
                            
     # Bootstrap from initial database? uncomment
@@ -475,7 +308,7 @@ def main():
     atoms.rescale_velocities(T)
     
     # Select MD propagator
-    mdpropagator = MLLangevin(atoms, dt, T*units.kB, 1.0e-2, fixcm=True)
+    mdpropagator = Langevin(atoms, dt, T*units.kB, 1.0e-2, fixcm=True)
     # mdpropagator = MLVerlet(atoms, dt, T)
 
     # Zero-timestep evaluation and data files setup.
@@ -498,8 +331,10 @@ def main():
     for istep in range(nsteps):
         
         print("Dihedral angles | phi = %.3f, psi = %.3f " % (atoms.phi(), atoms.psi()))
-        do_update = (istep % 10 == 9) # (istep in teaching_points) or (istep - nsteps == 1) # istep % 20 == 0 # 
-        pot_energy, f = mdpropagator.step(f, mlmodel, extfield, mixing=mixing, lammpsdata=lammpsdata, do_update=do_update)
+        do_update = (istep % 10 == 9) # (istep in teaching_points) or (istep - nsteps == 1) # istep % 20 == 0 #
+        mdpropagator.halfstep_1of2(f)
+        f, pot_energy, _ = get_all_forces(atoms, mlmodel, extfield=ext_field, mixing=mixing, lammpsdata=lammpsdata, do_update=do_update)
+        mdpropagator.halfstep_2of2(f)
 
         # manual cooldown!!!
         if sp.absolute(atoms.get_kinetic_energy() / (1.5 * units.kB * atoms.get_number_of_atoms()) - T) > 50:
