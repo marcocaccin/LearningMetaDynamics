@@ -3,7 +3,7 @@ from __future__ import print_function, division
 import os
 import scipy as sp
 from ase import units
-
+from time import sleep
 
 kcalmol2eV = units.kcal / units.mol
 
@@ -26,8 +26,7 @@ def replace_positions_lammps(atoms, datafile='data.input', preloaded_data=None):
     # and write everything back
     with open(datafile, 'w') as file:
         file.writelines(data)
-    file.close()
-
+    
     
 def load_lammps_forces(atoms, dumpfile='lmp_dump.xyz'):
     # WARNING: MUST declare "sort" option in LAMMPS input file for an ordered dump file.
@@ -69,6 +68,7 @@ def calc_lammps(atoms, datafile='data.input', preloaded_data=None, dumpfile='lmp
     replace_positions_lammps(atoms, datafile=datafile, preloaded_data=preloaded_data)
     # run the lammps executable with the given inputs
     os.system('%s < input > log' % lmp_exe)
+    # sleep(0.05)
     # load the results in
     pot_energy = load_lammps_pote(atoms)
     forces = load_lammps_forces(atoms, dumpfile=dumpfile)
