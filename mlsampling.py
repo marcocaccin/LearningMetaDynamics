@@ -217,7 +217,7 @@ def get_all_forces(atoms, mlmodel, extfield=None, mixing=[1.,0.,0.], lammpsdata=
     forces = [forces]
     ### ML IS HERE ###
     # Accumulate the new observation in the dataset
-    coarse_colvars = round_vector(atoms.colvars())
+    coarse_colvars = round_vector(atoms.colvars(), precision=grid_spacing)
     distance_from_data = sp_dist.cdist(
         sp.atleast_2d(coarse_colvars), mlmodel.X_fit_).ravel()
     # check if configuration has already occurred
@@ -228,7 +228,7 @@ def get_all_forces(atoms, mlmodel, extfield=None, mixing=[1.,0.,0.], lammpsdata=
             mlmodel.y[index] = pot_energy
         else:
             do_update = False
-#             # Learn F: uncomment this
+#             # Learn free energy: uncomment this
 #             beta = 1 / self.temp
 #             mlmodel.y[index] += - 1 / beta * sp.log(
 #                 1 + sp.exp(- beta * (pot_energy - mlmodel.y[index])))
@@ -239,8 +239,11 @@ def get_all_forces(atoms, mlmodel, extfield=None, mixing=[1.,0.,0.], lammpsdata=
         # update ML potential with all the data contained in it.
         mlmodel.update_fit()
     # Get ML constraint forces if the model is fitted
-    if hasattr(mlmodel, 'dual_coef_') and pot_energy < 0:
-        forces.append(get_constraint_forces(atoms, mlmodel))
+    if hasattr(mlmodel, 'dual_coef_'): # and pot_energy < 0:
+        ml_forces = get_constraint_forces(atoms, mlmodel)
+        # ml_forces /= sp.mean(map(LA.norm, ml_forces))
+        # ml_forces *= sp.mean(map(LA.norm, forces[0]))
+        forces.append(ml_forces)
     else:
         forces.append(sp.zeros(forces[0].shape))
     # X_near = Xplotgrid([atoms.phi() - 0.2, atoms.psi() - 0.2], [atoms.phi() - 0.2, atoms.psi() - 0.2], 2, 10)
@@ -252,14 +255,14 @@ def get_all_forces(atoms, mlmodel, extfield=None, mixing=[1.,0.,0.], lammpsdata=
 
     # EXTERNAL FIELD IS HERE
     if extfield is not None:
-        colvars = round_vector(atoms.colvars())
+        colvars = round_vector(atoms.colvars(), precision=grid_spacing)
         extfield.update_cost(colvars, pot_energy) 
         extfield_forces = get_extfield_forces(atoms, extfield)
         extfield_forces /= sp.mean(map(LA.norm, extfield_forces))
         extfield_forces *= sp.mean(map(LA.norm, forces[0]))
         forces.append(extfield_forces)
     # Compose the actual and the ML forces together by mixing them accordingly
-    # a [1,-1] mixing would result, in the perfect fitting limit, to a zero
+    # a [1,-1,0] mixing would result, in the perfect fitting limit, to a zero
     # mean field motion.
     forces = [m_i * f_i for m_i, f_i in zip(mixing, forces)]
     f = sp.sum(forces, axis=0)
@@ -274,6 +277,7 @@ def main():
     mixing = [1.0, -0.0, 0.0] # mixing weights for "real" and ML forces
     lengthscale = 0.6 # KRR Gaussian width.
     gamma = 1 / (2 * lengthscale**2)
+    grid_spacing = 0.05
     #     mlmodel = GaussianProcess(corr='squared_exponential', 
     #         # theta0=1e-1, thetaL=1e-4, thetaU=1e+2,
     #         theta0=1., 
@@ -281,14 +285,17 @@ def main():
     mlmodel = KernelRidge(kernel='rbf', 
                           gamma=gamma, gammaL = gamma/4, gammaU=2*gamma,
                            alpha=5.0e-2, variable_noise=False, max_lhood=False)
-    anglerange = sp.arange(0, 2*sp.pi + 0.05, 0.05)
+    anglerange = sp.arange(0, 2*sp.pi + grid_spacing, grid_spacing)
     X_grid = sp.array([[sp.array([x,y]) for x in anglerange]
                        for y in anglerange]).reshape((len(anglerange)**2, 2))
     ext_field = IgnoranceField(X_grid, y_threshold=1.0e-1, cutoff = 3.)
                            
     # Bootstrap from initial database? uncomment
-    # data = sp.loadtxt('phi_psi_minener_coarse_1M_md.csv') 
-    # mlmodel.fit(data[:,:2], data[:,2])
+    data = sp.loadtxt('phi_psi_minener_coarse_1M_md.csv')
+    data[:,:2] -= 0.025 # fix because of old round_vector routine
+    mlmodel.fit(data[:,:2], data[:,2])
+    for X, y in zip(mlmodel.X_fit_, mlmodel.y):
+        ext_field.update_cost(X, y)
     
     # Prepare diagnostic visual effects.
     plt.close('all')
@@ -314,7 +321,7 @@ def main():
     # Zero-timestep evaluation and data files setup.
     print("START")
     pot_energy, f = calc_lammps(atoms, preloaded_data=lammpsdata)
-    mlmodel.accumulate_data(round_vector(atoms.colvars()), pot_energy)
+    mlmodel.accumulate_data(round_vector(atoms.colvars(), precision=grid_spacing), pot_energy)
     printenergy(atoms, pot_energy)
     try:
         os.remove('atomstraj.xyz')
@@ -331,9 +338,9 @@ def main():
     for istep in range(nsteps):
         
         print("Dihedral angles | phi = %.3f, psi = %.3f " % (atoms.phi(), atoms.psi()))
-        do_update = (istep % 10 == 9) # (istep in teaching_points) or (istep - nsteps == 1) # istep % 20 == 0 #
+        do_update = False # (istep % 10 == 9) # (istep in teaching_points) or (istep - nsteps == 1) # istep % 20 == 0 #
         mdpropagator.halfstep_1of2(f)
-        f, pot_energy, _ = get_all_forces(atoms, mlmodel, extfield=ext_field, mixing=mixing, lammpsdata=lammpsdata, do_update=do_update)
+        f, pot_energy, _ = get_all_forces(atoms, mlmodel, grid_spacing, extfield=ext_field, mixing=mixing, lammpsdata=lammpsdata, do_update=do_update)
         mdpropagator.halfstep_2of2(f)
 
         # manual cooldown!!!
