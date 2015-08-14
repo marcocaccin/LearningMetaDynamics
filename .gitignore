@@ -39,3 +39,9 @@ data.input
 
 *.pkl
 *.mp4
+
+*.npy
+
+lastrunlog
+
+OLD_MLsampling_MDPropagators.py
