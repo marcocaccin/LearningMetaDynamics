@@ -150,8 +150,7 @@ class IgnoranceField:
             index = where_a_in_b(X, self.X_grid).item()
             self.y_grid[index] = y
             self.wall[index] = (y > self.y_threshold)
-            ignorance = self.n_grid[index]
-            self.n_grid[index] = 1. / (1. / self.n_grid[index] + 1)
+            self.n_grid[index] = 1. / (self.n_grid[index] + 1)
 
 
     def distance_vectors_not_walled(self, X0):
