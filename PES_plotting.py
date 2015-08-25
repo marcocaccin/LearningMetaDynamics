@@ -9,17 +9,17 @@ class Plot_energy_n_point:
     def __init__(self, ax, mlmodel, current_point):
         self.ax = ax
         self.mlmodel = mlmodel
-        x = y = sp.linspace(0,2*sp.pi, 80)
+        x = y = sp.linspace(0,2*sp.pi, 64)
         self.X, self.Y = sp.meshgrid(x, y)
         self.gridpts = sp.vstack((self.X.ravel(), self.Y.ravel())).T
-        zmin, zmax = mlmodel.y.min() - 0.2, mlmodel.y.max() + 0.2
+        zmin, zmax = mlmodel.y.min() - 0.0, mlmodel.y.max() + 0.0
         
         Z = self.mlmodel.predict(self.gridpts)
         Z[Z > zmax] = zmax
         Z[Z < zmin] = zmin
         Z = Z.reshape(self.X.shape)
         self.meshplot = ax.pcolormesh(self.X, self.Y, Z, cmap = cm.RdBu, alpha = 0.8,
-                                      edgecolors='None', vmin = -1., vmax = 0.5, rasterized=True)
+                                      edgecolors='None') #, vmin = -1., vmax = 0.5, rasterized=True)
         
         self.scatterplot = ax.scatter(current_point[0], current_point[1], marker='h', 
                                       s = 400, c = 'g', alpha = 0.5)
@@ -37,7 +37,7 @@ class Plot_energy_n_point:
         
     
     def update_prediction(self):
-        zmin, zmax = self.mlmodel.y.min() - 0.2, self.mlmodel.y.max() + 0.2
+        zmin, zmax = self.mlmodel.y.min() - 0.0, self.mlmodel.y.max() + 0.0
         Z = self.mlmodel.predict(self.gridpts)
         Z[Z > zmax] = zmax
         Z[Z < zmin] = zmin
