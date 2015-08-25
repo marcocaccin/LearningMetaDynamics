@@ -20,7 +20,7 @@ class Plot_energy_n_point:
         Z[Z < zmin] = zmin
         Z = Z.reshape(self.X.shape)
         self.meshplot = ax.pcolormesh(self.X, self.Y, Z, cmap = cm.hot, alpha = 0.8,
-                                      edgecolors='None') #, vmin = -1., vmax = 0.5, rasterized=True)
+                                      edgecolors='None', vmax = 0.) #, vmin = -1., rasterized=True)
         
         self.scatterplot = ax.scatter(current_point[0], current_point[1], marker='h', 
                                       s = 400, c = 'g', alpha = 0.5)
@@ -38,10 +38,10 @@ class Plot_energy_n_point:
         
     
     def update_prediction(self):
-        zmin, zmax = self.mlmodel.y.min() - 0.0, self.mlmodel.y.max() + 0.0
-
+        # zmin, zmax = self.mlmodel.y.min() - 0.0, self.mlmodel.y.max() + 0.0
         distances = spdist.cdist(self.gridpts, self.mlmodel.X_fit_)
-        mask = [mindist < 0.2 for mindist in map(min, distances)]
+        mask = (distances < 0.4)
+        mask = map(any, mask)
         idx = sp.where(mask)[0]
         # white-ish background
         Z = sp.zeros(len(self.gridpts)) # self.mlmodel.y.mean()* sp.ones(len(self.gridpts))
