@@ -26,7 +26,7 @@ from ignorance_field import IgnoranceField
 from time import time as get_time
 
 
-SAMPLE_WEIGHT = 2
+SAMPLE_WEIGHT = 5
 ##### Levi-Civita symbol used for Theano cross product #####
 eijk = sp.zeros((3,3,3))
 eijk[0, 1, 2] = eijk[1, 2, 0] = eijk[2, 0, 1] = 1
@@ -259,7 +259,15 @@ def get_all_forces(atoms, mlmodel, grid_spacing, temperature, extfield=None, mix
             mlmodel.y[index] = - units.kB * temperature * sp.log(sp.exp(-mlmodel.y[index] / (units.kB * temperature)) + SAMPLE_WEIGHT)
         else:
             mlmodel.accumulate_data(coarse_colvars, - units.kB * temperature * sp.log(SAMPLE_WEIGHT))
-            # mlmodel.accumulate_data(coarse_colvars, pot_energy)
+            cv = coarse_colvars.ravel()
+            xx = sp.linspace(cv[0] - 2*grid_spacing, cv[0] + 2*grid_spacing, 5)
+            yy = sp.linspace(cv[1] - 2*grid_spacing, cv[1] + 2*grid_spacing, 5)
+            XX, YY = sp.meshgrid(xx, yy)
+            near_bins = sp.vstack((XX.ravel(), YY.ravel())).T
+            distance_from_data = sp_dist.cdist(sp.atleast_2d(near_bins), mlmodel.X_fit_)
+            for distance, near_bin in zip(distance_from_data, near_bins):
+                if distance.min() > 0.:
+                    mlmodel.accumulate_data(near_bin, 0.)
         if do_update:
             # update ML potential with all the data contained in it.
             mlmodel.update_fit()
@@ -302,12 +310,12 @@ def main():
     mixing = [1,-1,0] # [1.0, -1.0, 0.3] # mixing weights for "real" and ML forces
     lengthscale = 0.5 # KRR Gaussian width.
     gamma = 1 / (2 * lengthscale**2)
-    grid_spacing = 0.1
+    grid_spacing = 0.05
     #     mlmodel = GaussianProcess(corr='squared_exponential', 
     #         # theta0=1e-1, thetaL=1e-4, thetaU=1e+2,
     #         theta0=1., 
     #         random_start=100, normalize=False, nugget=1.0e-2)
-    mlmodel = KernelRidge(kernel='rbf_periodic', 
+    mlmodel = KernelRidge(kernel='rbf', 
                           gamma=gamma, gammaL = gamma/4, gammaU=2*gamma,
                            alpha=1.0e-2, variable_noise=False, max_lhood=False)
     anglerange = sp.arange(0, 2*sp.pi + grid_spacing, grid_spacing)
@@ -321,6 +329,7 @@ def main():
     # mlmodel.fit(data[:,:2], data[:,2])
     # ext_field.update_cost(mlmodel.X_fit_, mlmodel.y)
 
+    # mlmodel.fit(X_grid, sp.zeros(len(X_grid)))
     # mlmodel.fit(sp.load('X_fitD.npy'), sp.load('y_fitD.npy'))
     
     # Prepare diagnostic visual effects.
@@ -366,7 +375,7 @@ def main():
         # Flush Cholesky decomposition of K
         if istep % 1000 == 0:
             mlmodel.Cho_L = None
-            mlmodel.max_lhood = True
+            mlmodel.max_lhood = False
         print("Dihedral angles | phi = %.3f, psi = %.3f " % (atoms.phi(), atoms.psi()))
         do_update = (istep % 60 == 59)
         t = get_time()
