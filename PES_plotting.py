@@ -3,6 +3,7 @@ from __future__ import print_function, division
 import scipy as sp
 from matplotlib import pyplot as plt
 from matplotlib import cm
+import scipy.spatial.distance as spdist
 
 
 class Plot_energy_n_point:
@@ -18,7 +19,7 @@ class Plot_energy_n_point:
         Z[Z > zmax] = zmax
         Z[Z < zmin] = zmin
         Z = Z.reshape(self.X.shape)
-        self.meshplot = ax.pcolormesh(self.X, self.Y, Z, cmap = cm.RdBu, alpha = 0.8,
+        self.meshplot = ax.pcolormesh(self.X, self.Y, Z, cmap = cm.hot, alpha = 0.8,
                                       edgecolors='None') #, vmin = -1., vmax = 0.5, rasterized=True)
         
         self.scatterplot = ax.scatter(current_point[0], current_point[1], marker='h', 
@@ -38,9 +39,15 @@ class Plot_energy_n_point:
     
     def update_prediction(self):
         zmin, zmax = self.mlmodel.y.min() - 0.0, self.mlmodel.y.max() + 0.0
-        Z = self.mlmodel.predict(self.gridpts)
-        Z[Z > zmax] = zmax
-        Z[Z < zmin] = zmin
+
+        distances = spdist.cdist(self.gridpts, self.mlmodel.X_fit_)
+        mask = [mindist < 0.2 for mindist in map(min, distances)]
+        idx = sp.where(mask)[0]
+        # white-ish background
+        Z = sp.zeros(len(self.gridpts)) # self.mlmodel.y.mean()* sp.ones(len(self.gridpts))
+        Z[idx] = self.mlmodel.predict(self.gridpts[idx])
+        # Z[Z > zmax] = zmax
+        # Z[Z < zmin] = zmin
         Z = Z.reshape(self.X.shape)
         self.meshplot.set_array(Z[:-1,:-1].ravel())
         return self
@@ -53,8 +60,7 @@ class Plot_datapts:
         self.ylim = self.xlim = (0, 2*sp.pi)
         self.scatterplot = ax.scatter(self.mlmodel.X_fit_[:,0], self.mlmodel.X_fit_[:,1], 
                                       c = self.mlmodel.y, marker = 'o', s = 50, 
-                                      cmap = cm.RdBu, alpha = 0.8, edgecolors='none',
-                                      vmin = -1., vmax = 0.5)
+                                      cmap = cm.RdBu, alpha = 0.8, edgecolors='none') #, vmin = -1., vmax = 0.5)
         self.ax.set_xlim(self.xlim)
         self.ax.set_ylim(self.ylim)
         self.ax.set_title('Data Points')
