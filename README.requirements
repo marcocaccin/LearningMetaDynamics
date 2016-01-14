@@ -1,0 +1,9 @@
+scipy
+numpy
+matplotlib
+
+ase
+LAMMPS
+
+theano
+scikit-learn: forked version in github/marcocaccin
